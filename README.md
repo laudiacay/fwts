@@ -1,6 +1,11 @@
 # fwts
 
+[![PyPI version](https://badge.fury.io/py/fwts.svg)](https://pypi.org/project/fwts/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Git worktree workflow manager for feature development. Automates creating worktrees, tmux sessions, docker services, and more.
+
+**Why fwts?** When working on multiple features simultaneously, git worktrees let you have separate working directories for each branch. fwts automates the tedious parts: creating worktrees, spinning up tmux sessions, managing docker services, and switching shared resources between features.
 
 ## Features
 
@@ -18,18 +23,18 @@ Git worktree workflow manager for feature development. Automates creating worktr
 
 ## Installation
 
+### From Homebrew (macOS)
+
+```bash
+brew install laudiacay/tap/fwts
+```
+
 ### From PyPI
 
 ```bash
 pip install fwts
 # or with uv
 uv tool install fwts
-```
-
-### From Homebrew
-
-```bash
-brew install laudiacay/tap/fwts
 ```
 
 ## Quick Start
@@ -46,7 +51,7 @@ fwts init --global
 ```bash
 cd ~/code/myproject
 fwts init
-# Edit ..fwts.toml to configure
+# Edit .fwts.toml to configure
 ```
 
 3. Start working on a feature:
@@ -104,28 +109,28 @@ Create `~/.config/fwts/config.toml` for managing multiple projects:
 
 ```toml
 # Default project when not in a project directory
-default_project = "supplyco"
-
-[projects.supplyco]
-name = "supplyco"
-main_repo = "~/code/supplyco"
-worktree_base = "~/code/supplyco-worktrees"
-base_branch = "dev"
-github_repo = "workonsupplyco/supplyco"
-
-[projects.supplyco.focus]
-on_focus = ["just docker expose-db"]
+default_project = "myproject"
 
 [projects.myproject]
 name = "myproject"
 main_repo = "~/code/myproject"
 worktree_base = "~/code/myproject-worktrees"
 base_branch = "main"
+github_repo = "username/myproject"
+
+[projects.myproject.focus]
+on_focus = ["just docker expose-db"]
+
+[projects.another]
+name = "another"
+main_repo = "~/code/another"
+worktree_base = "~/code/another-worktrees"
+base_branch = "dev"
 ```
 
 ### Per-Repo Config
 
-Create `..fwts.toml` in your repo root:
+Create `.fwts.toml` in your repo root:
 
 ```toml
 [project]
@@ -159,7 +164,7 @@ on_focus = ["just docker expose-db"]
 on_unfocus = []
 
 # Per-branch pattern overrides
-[focus.overrides."claudia-*"]
+[focus.overrides."feature-*"]
 on_focus = ["just docker expose-db", "just connect dev-tunnel"]
 
 [symlinks]
@@ -178,13 +183,13 @@ color_map = { success = "green", failure = "red", pending = "yellow" }
 
 ### Per-Worktree Config
 
-Create `.fwts.local.toml` in a worktree to override settings for that specific worktree. This file is gitignored.
+Create `.fwts.local.toml` in a worktree to override settings for that specific worktree. This file should be gitignored.
 
 ### Config Hierarchy
 
 Configuration is loaded and merged in this order (later overrides earlier):
 1. `~/.config/fwts/config.toml` (global)
-2. `<main_repo>/..fwts.toml` (per-repo)
+2. `<main_repo>/.fwts.toml` (per-repo)
 3. `<worktree>/.fwts.local.toml` (per-worktree)
 
 ## Commands
