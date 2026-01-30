@@ -137,16 +137,5 @@ def get_builtin_hooks() -> list[ColumnHook]:
                 "none": "dim",
             },
         ),
-        ColumnHook(
-            name="PR",
-            hook='gh pr view "$BRANCH_NAME" --json state,reviewDecision -q \'(.state | ascii_downcase) + "/" + (.reviewDecision // "none" | ascii_downcase)\' 2>/dev/null || echo "none"',
-            color_map={
-                "open/approved": "green",
-                "open/changes_requested": "red",
-                "open/none": "yellow",
-                "merged": "magenta",
-                "closed": "dim",
-                "none": "dim",
-            },
-        ),
+        # Note: PR status is now handled inline in the TUI, not as a hook
     ]

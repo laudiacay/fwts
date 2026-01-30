@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import subprocess
 import sys
 import threading
 import time
+import webbrowser
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from enum import Enum
+from typing import Any
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -18,7 +23,7 @@ from rich.text import Text
 from fwts.config import Config
 from fwts.focus import get_focused_branch, has_focus
 from fwts.git import Worktree, list_worktrees
-from fwts.github import get_pr_by_branch
+from fwts.github import PRInfo, ReviewState, get_pr_by_branch
 from fwts.hooks import HookResult, get_builtin_hooks, run_all_hooks
 from fwts.tmux import session_exists, session_name_from_branch
 
@@ -26,6 +31,19 @@ console = Console()
 
 # Auto-refresh interval in seconds
 AUTO_REFRESH_INTERVAL = 30
+
+# Arrow key escape sequences
+KEY_UP = "\x1b[A"
+KEY_DOWN = "\x1b[B"
+
+
+class TUIMode(Enum):
+    """TUI display modes."""
+
+    WORKTREES = "worktrees"
+    TICKETS_MINE = "tickets_mine"
+    TICKETS_REVIEW = "tickets_review"
+    TICKETS_ALL = "tickets_all"
 
 
 @dataclass
@@ -36,15 +54,39 @@ class WorktreeInfo:
     session_active: bool = False
     has_focus: bool = False
     hook_data: dict[str, HookResult] = field(default_factory=dict)
-    pr_url: str | None = None
+    pr_info: PRInfo | None = None
+
+    @property
+    def pr_url(self) -> str | None:
+        return self.pr_info.url if self.pr_info else None
+
+
+@dataclass
+class TicketInfo:
+    """Linear ticket for display."""
+
+    id: str
+    identifier: str
+    title: str
+    state: str
+    state_type: str
+    priority: int
+    assignee: str | None
+    url: str
+    branch_name: str
+    # Added for cross-referencing with local state
+    has_local_worktree: bool = False
+    pr_info: PRInfo | None = None
 
 
 class FeatureboxTUI:
-    """Interactive TUI with multi-select table."""
+    """Interactive TUI with multi-select table and mode switching."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, initial_mode: TUIMode = TUIMode.WORKTREES):
         self.config = config
+        self.mode = initial_mode
         self.worktrees: list[WorktreeInfo] = []
+        self.tickets: list[TicketInfo] = []
         self.selected: set[int] = set()
         self.cursor: int = 0
         self.running = True
@@ -67,13 +109,8 @@ class FeatureboxTUI:
             if not wt.is_bare and wt.branch != self.config.project.base_branch
         ]
 
-    async def _load_data(self) -> None:
+    async def _load_worktree_data(self) -> None:
         """Load worktree data and run hooks."""
-        with self._refresh_lock:
-            self.loading = True
-            self.status_message = "Refreshing..."
-            self.status_style = "yellow"
-
         worktrees = self._get_feature_worktrees()
         github_repo = self.config.project.github_repo
 
@@ -87,14 +124,10 @@ class FeatureboxTUI:
                 has_focus=has_focus(wt, self.config),
             )
 
-            # Fetch PR URL
+            # Fetch PR info
             if github_repo:
-                try:
-                    pr = get_pr_by_branch(wt.branch, github_repo)
-                    if pr:
-                        info.pr_url = pr.url
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception):
+                    info.pr_info = get_pr_by_branch(wt.branch, github_repo)
 
             new_worktrees.append(info)
 
@@ -110,20 +143,95 @@ class FeatureboxTUI:
 
         with self._refresh_lock:
             self.worktrees = new_worktrees
+
+    async def _load_ticket_data(self) -> None:
+        """Load tickets from Linear based on current mode."""
+        from fwts.linear import list_my_tickets, list_review_requests, list_team_tickets
+
+        api_key = self.config.linear.api_key
+        github_repo = self.config.project.github_repo
+
+        # Get local worktrees to cross-reference
+        local_worktrees = self._get_feature_worktrees()
+        local_branches = {wt.branch.lower() for wt in local_worktrees}
+
+        try:
+            if self.mode == TUIMode.TICKETS_MINE:
+                raw_tickets = await list_my_tickets(api_key)
+            elif self.mode == TUIMode.TICKETS_REVIEW:
+                raw_tickets = await list_review_requests(api_key)
+            elif self.mode == TUIMode.TICKETS_ALL:
+                raw_tickets = await list_team_tickets(api_key)
+            else:
+                raw_tickets = []
+
+            self.tickets = []
+            for t in raw_tickets:
+                # Check if we have a local worktree for this ticket
+                # Match by ticket identifier in branch name
+                has_local = any(
+                    t.identifier.lower() in branch or
+                    (t.branch_name and t.branch_name.lower() == branch)
+                    for branch in local_branches
+                )
+
+                # Try to get PR info if we have a branch
+                pr_info = None
+                if github_repo and t.branch_name:
+                    with contextlib.suppress(Exception):
+                        pr_info = get_pr_by_branch(t.branch_name, github_repo)
+
+                self.tickets.append(TicketInfo(
+                    id=t.id,
+                    identifier=t.identifier,
+                    title=t.title,
+                    state=t.state,
+                    state_type=t.state_type,
+                    priority=t.priority,
+                    assignee=t.assignee,
+                    url=t.url,
+                    branch_name=t.branch_name,
+                    has_local_worktree=has_local,
+                    pr_info=pr_info,
+                ))
+        except Exception as e:
+            self.status_message = f"Failed to load tickets: {e}"
+            self.status_style = "red"
+            self.tickets = []
+
+    async def _load_data(self) -> None:
+        """Load data based on current mode."""
+        with self._refresh_lock:
+            self.loading = True
+            self.status_message = "Refreshing..."
+            self.status_style = "yellow"
+
+        if self.mode == TUIMode.WORKTREES:
+            await self._load_worktree_data()
+        else:
+            await self._load_ticket_data()
+
+        with self._refresh_lock:
             self.loading = False
             self.needs_refresh = False
             self.last_refresh = time.time()
-            self.status_message = None
+            if not self.status_message or self.status_message == "Refreshing...":
+                self.status_message = None
 
-    def _render_table(self) -> Table:
+    def _get_current_items(self) -> list:
+        """Get current list of items based on mode."""
+        if self.mode == TUIMode.WORKTREES:
+            return self.worktrees
+        return self.tickets
+
+    def _render_worktree_table(self) -> Table:
         """Render the worktree table."""
-        # Get project name and focus info for title
         project_name = self.config.project.name or "fwts"
         focused_branch = get_focused_branch(self.config)
         focus_info = f" [green]◉ {focused_branch}[/green]" if focused_branch else ""
 
         table = Table(
-            title=f"[bold]{project_name}[/bold]{focus_info}",
+            title=f"[bold]{project_name}[/bold]{focus_info} [dim](worktrees)[/dim]",
             show_header=True,
             header_style="bold cyan",
             border_style="dim",
@@ -139,7 +247,8 @@ class FeatureboxTUI:
         for hook in hooks:
             table.add_column(hook.name, width=12)
 
-        table.add_column("PR", style="cyan")
+        # PR column - wider to show status properly
+        table.add_column("PR", width=20)
 
         if self.loading and not self.worktrees:
             table.add_row("[dim]Loading...[/dim]")
@@ -151,14 +260,14 @@ class FeatureboxTUI:
 
         for idx, info in enumerate(self.worktrees):
             # Cursor and selection
-            cursor = ">" if idx == self.cursor else " "
+            cursor_char = ">" if idx == self.cursor else " "
             selected = "✓" if idx in self.selected else " "
-            prefix = f"{cursor}{selected}"
+            prefix = f"{cursor_char}{selected}"
 
             # Branch name (truncate if too long)
             branch = info.worktree.branch
-            if len(branch) > 50:
-                branch = branch[:47] + "..."
+            if len(branch) > 40:
+                branch = branch[:37] + "..."
 
             # Focus status
             focus = "[green]◉[/green]" if info.has_focus else "[dim]○[/dim]"
@@ -178,13 +287,8 @@ class FeatureboxTUI:
                 else:
                     hook_values.append(Text("-", style="dim"))
 
-            # PR URL or path
-            if info.pr_url:
-                # Show just the PR number as a clickable-looking link
-                pr_num = info.pr_url.split("/")[-1]
-                pr_display = f"#{pr_num}"
-            else:
-                pr_display = "[dim]no PR[/dim]"
+            # PR display - show state and number combined
+            pr_display = self._format_pr_display(info.pr_info)
 
             # Highlight row if at cursor
             style = "reverse" if idx == self.cursor else None
@@ -193,6 +297,107 @@ class FeatureboxTUI:
 
         return table
 
+    def _format_pr_display(self, pr: PRInfo | None) -> Text:
+        """Format PR info for display."""
+        if not pr:
+            return Text("no PR", style="dim")
+
+        # Build status string: state/review #number
+        parts = []
+
+        # State
+        if pr.state == "merged":
+            parts.append(("merged", "magenta"))
+        elif pr.state == "closed":
+            parts.append(("closed", "dim"))
+        elif pr.is_draft:
+            parts.append(("draft", "dim"))
+        else:
+            # Show review status for open PRs
+            if pr.review_decision == ReviewState.APPROVED:
+                parts.append(("approved", "green"))
+            elif pr.review_decision == ReviewState.CHANGES_REQUESTED:
+                parts.append(("changes", "red"))
+            elif pr.review_decision == ReviewState.PENDING:
+                parts.append(("review", "yellow"))
+            else:
+                parts.append(("open", "yellow"))
+
+        text = Text()
+        for part_text, part_style in parts:
+            text.append(part_text, style=part_style)
+
+        text.append(f" #{pr.number}", style="cyan")
+        return text
+
+    def _render_ticket_table(self) -> Table:
+        """Render the tickets table."""
+        mode_names = {
+            TUIMode.TICKETS_MINE: "my tickets",
+            TUIMode.TICKETS_REVIEW: "review requests",
+            TUIMode.TICKETS_ALL: "all tickets",
+        }
+        mode_name = mode_names.get(self.mode, "tickets")
+
+        table = Table(
+            title=f"[bold]Linear Tickets[/bold] [dim]({mode_name})[/dim]",
+            show_header=True,
+            header_style="bold cyan",
+            border_style="dim",
+        )
+
+        table.add_column("", width=2)
+        table.add_column("ID", style="cyan", width=10)
+        table.add_column("Title", style="bold")
+        table.add_column("State", width=14)
+        table.add_column("Local", width=5)  # Local worktree indicator
+        table.add_column("PR", width=16)  # PR status
+
+        if self.loading and not self.tickets:
+            table.add_row("[dim]Loading...[/dim]")
+            return table
+
+        if not self.tickets:
+            table.add_row("[dim]No tickets found[/dim]")
+            return table
+
+        for idx, ticket in enumerate(self.tickets):
+            prefix = ">" if idx == self.cursor else " "
+
+            # Color state based on type
+            state_style = {
+                "backlog": "dim",
+                "unstarted": "yellow",
+                "started": "blue",
+                "completed": "green",
+                "canceled": "red",
+            }.get(ticket.state_type, "dim")
+
+            state_text = Text(ticket.state)
+            state_text.stylize(state_style)
+
+            # Local worktree indicator
+            local = "[green]●[/green]" if ticket.has_local_worktree else "[dim]○[/dim]"
+
+            # PR status
+            pr_display = self._format_pr_display(ticket.pr_info)
+
+            # Truncate title
+            title = ticket.title
+            if len(title) > 40:
+                title = title[:37] + "..."
+
+            style = "reverse" if idx == self.cursor else None
+            table.add_row(prefix, ticket.identifier, title, state_text, local, pr_display, style=style)
+
+        return table
+
+    def _render_table(self) -> Table:
+        """Render table based on current mode."""
+        if self.mode == TUIMode.WORKTREES:
+            return self._render_worktree_table()
+        return self._render_ticket_table()
+
     def _render_help(self) -> Text:
         """Render help text."""
         help_text = Text()
@@ -200,20 +405,45 @@ class FeatureboxTUI:
         help_text.append(" down  ")
         help_text.append("k/↑", style="bold")
         help_text.append(" up  ")
-        help_text.append("space", style="bold")
-        help_text.append(" select  ")
-        help_text.append("a", style="bold")
-        help_text.append(" all  ")
-        help_text.append("enter", style="bold")
-        help_text.append(" launch  ")
-        help_text.append("f", style="bold")
-        help_text.append(" focus  ")
-        help_text.append("d", style="bold")
-        help_text.append(" cleanup  ")
+
+        if self.mode == TUIMode.WORKTREES:
+            help_text.append("space", style="bold")
+            help_text.append(" select  ")
+            help_text.append("a", style="bold")
+            help_text.append(" all  ")
+            help_text.append("enter", style="bold")
+            help_text.append(" launch  ")
+            help_text.append("f", style="bold")
+            help_text.append(" focus  ")
+            help_text.append("d", style="bold")
+            help_text.append(" cleanup  ")
+            help_text.append("o", style="bold")
+            help_text.append(" open PR  ")
+        else:
+            help_text.append("enter", style="bold")
+            help_text.append(" start worktree  ")
+            help_text.append("o", style="bold")
+            help_text.append(" open ticket  ")
+            help_text.append("p", style="bold")
+            help_text.append(" open PR  ")
         help_text.append("r", style="bold")
         help_text.append(" refresh  ")
         help_text.append("q", style="bold")
         help_text.append(" quit")
+
+        # Mode switching help
+        help_text.append("\n")
+        help_text.append("tab", style="bold")
+        help_text.append(" cycle modes  ")
+        help_text.append("1", style="bold")
+        help_text.append(" worktrees  ")
+        help_text.append("2", style="bold")
+        help_text.append(" my tickets  ")
+        help_text.append("3", style="bold")
+        help_text.append(" reviews  ")
+        help_text.append("4", style="bold")
+        help_text.append(" all tickets")
+
         return help_text
 
     def _render_status(self) -> Text:
@@ -256,41 +486,125 @@ class FeatureboxTUI:
             border_style="blue",
         )
 
+    def _open_current_url(self, open_pr: bool = False) -> None:
+        """Open URL for current item in browser.
+
+        Args:
+            open_pr: If True and item has a PR, open PR instead of ticket
+        """
+        items = self._get_current_items()
+        if not items or self.cursor >= len(items):
+            return
+
+        item = items[self.cursor]
+
+        if self.mode == TUIMode.WORKTREES:
+            # Open PR URL
+            if isinstance(item, WorktreeInfo) and item.pr_url and item.pr_info:
+                try:
+                    subprocess.run(["open", item.pr_url], check=False)
+                    self.set_status(f"Opened PR #{item.pr_info.number}", "green")
+                except Exception:
+                    webbrowser.open(item.pr_url)
+            else:
+                self.set_status("No PR for this worktree", "yellow")
+        else:
+            # Ticket modes
+            if isinstance(item, TicketInfo):
+                # 'p' opens PR if available, 'o' opens ticket
+                if open_pr and item.pr_info:
+                    url = item.pr_info.url
+                    label = f"PR #{item.pr_info.number}"
+                else:
+                    url = item.url
+                    label = item.identifier
+                try:
+                    subprocess.run(["open", url], check=False)
+                    self.set_status(f"Opened {label}", "green")
+                except Exception:
+                    webbrowser.open(url)
+
+    def _switch_mode(self, new_mode: TUIMode) -> None:
+        """Switch to a new mode."""
+        if new_mode != self.mode:
+            self.mode = new_mode
+            self.cursor = 0
+            self.selected.clear()
+            self.needs_refresh = True
+
+    def _cycle_mode(self) -> None:
+        """Cycle through modes."""
+        modes = [TUIMode.WORKTREES, TUIMode.TICKETS_MINE, TUIMode.TICKETS_REVIEW, TUIMode.TICKETS_ALL]
+        current_idx = modes.index(self.mode)
+        next_idx = (current_idx + 1) % len(modes)
+        self._switch_mode(modes[next_idx])
+
     def _handle_key(self, key: str) -> str | None:
         """Handle keyboard input.
 
-        Returns action to perform: 'launch', 'cleanup', 'focus', or None
+        Returns action to perform: 'launch', 'cleanup', 'focus', 'start_ticket', or None
         """
-        # Arrow key escape sequences
-        KEY_UP = "\x1b[A"
-        KEY_DOWN = "\x1b[B"
+        items = self._get_current_items()
 
         if key in ("q", "Q"):
             self.running = False
             return None
 
+        # Mode switching
+        if key == "\t":  # Tab
+            self._cycle_mode()
+            return None
+        if key == "1":
+            self._switch_mode(TUIMode.WORKTREES)
+            return None
+        if key == "2":
+            self._switch_mode(TUIMode.TICKETS_MINE)
+            return None
+        if key == "3":
+            self._switch_mode(TUIMode.TICKETS_REVIEW)
+            return None
+        if key == "4":
+            self._switch_mode(TUIMode.TICKETS_ALL)
+            return None
+
+        # Navigation
         if key in ("j", KEY_DOWN):
-            self.cursor = min(self.cursor + 1, len(self.worktrees) - 1)
+            self.cursor = min(self.cursor + 1, len(items) - 1) if items else 0
         elif key in ("k", KEY_UP):
             self.cursor = max(self.cursor - 1, 0)
-        elif key == " ":
-            if self.cursor in self.selected:
-                self.selected.discard(self.cursor)
-            else:
-                self.selected.add(self.cursor)
-        elif key in ("a", "A"):
-            if len(self.selected) == len(self.worktrees):
-                self.selected.clear()
-            else:
-                self.selected = set(range(len(self.worktrees)))
-        elif key in ("\r", "\n"):
-            return "launch"
-        elif key in ("d", "D"):
-            return "cleanup"
-        elif key in ("f", "F"):
-            return "focus"
+
+        # Open URL
+        elif key in ("o", "O"):
+            self._open_current_url(open_pr=False)
+        elif key in ("p", "P"):
+            self._open_current_url(open_pr=True)
+
+        # Refresh
         elif key in ("r", "R"):
             self.needs_refresh = True
+
+        # Mode-specific actions
+        elif self.mode == TUIMode.WORKTREES:
+            if key == " ":
+                if self.cursor in self.selected:
+                    self.selected.discard(self.cursor)
+                else:
+                    self.selected.add(self.cursor)
+            elif key in ("a", "A"):
+                if len(self.selected) == len(self.worktrees):
+                    self.selected.clear()
+                else:
+                    self.selected = set(range(len(self.worktrees)))
+            elif key in ("\r", "\n"):
+                return "launch"
+            elif key in ("d", "D"):
+                return "cleanup"
+            elif key in ("f", "F"):
+                return "focus"
+        else:
+            # Ticket modes
+            if key in ("\r", "\n"):
+                return "start_ticket"
 
         return None
 
@@ -303,6 +617,12 @@ class FeatureboxTUI:
             return []
         return [self.worktrees[i] for i in sorted(self.selected)]
 
+    def get_selected_ticket(self) -> TicketInfo | None:
+        """Get currently selected ticket."""
+        if 0 <= self.cursor < len(self.tickets):
+            return self.tickets[self.cursor]
+        return None
+
     def set_status(self, message: str, style: str = "dim") -> None:
         """Set status message."""
         self.status_message = message
@@ -312,16 +632,18 @@ class FeatureboxTUI:
         """Clear status message."""
         self.status_message = None
 
-    def run(self) -> tuple[str | None, list[WorktreeInfo]]:
+    def run(self) -> tuple[str | None, list[WorktreeInfo] | TicketInfo | None]:
         """Run the TUI.
 
         Returns:
-            Tuple of (action, selected_worktrees) where action is 'launch', 'cleanup', 'focus', or None
+            Tuple of (action, data) where:
+            - action is 'launch', 'cleanup', 'focus', 'start_ticket', or None
+            - data is list[WorktreeInfo] for worktree actions or TicketInfo for ticket actions
         """
         # Simple fallback for non-TTY or when keyboard input isn't available
         if not sys.stdin.isatty():
             console.print("[yellow]TUI requires interactive terminal[/yellow]")
-            return None, []
+            return None, None
 
         try:
             import readchar  # type: ignore[import-not-found]
@@ -330,13 +652,13 @@ class FeatureboxTUI:
                 "[yellow]Install 'readchar' for interactive mode: pip install readchar[/yellow]"
             )
             console.print("[dim]Falling back to list mode...[/dim]")
-            return None, []
+            return None, None
 
         # Initial data load
         asyncio.run(self._load_data())
 
         action = None
-        selected = []
+        result_data = None
 
         with Live(self._render(), auto_refresh=False, console=console) as live:
             while self.running:
@@ -349,7 +671,10 @@ class FeatureboxTUI:
                     action = self._handle_key(key)
 
                     if action:
-                        selected = self.get_selected_worktrees()
+                        if action == "start_ticket":
+                            result_data = self.get_selected_ticket()
+                        else:
+                            result_data = self.get_selected_worktrees()
                         self.running = False
                         break
 
@@ -363,10 +688,10 @@ class FeatureboxTUI:
                     self.running = False
                     break
 
-        return action, selected
+        return action, result_data
 
     def run_with_cleanup_status(
-        self, cleanup_func: callable, worktrees: list[WorktreeInfo]
+        self, cleanup_func: Callable[[Any, Config], None], worktrees: list[WorktreeInfo]
     ) -> None:
         """Run cleanup with status updates in the TUI.
 
@@ -426,21 +751,29 @@ def simple_list(config: Config) -> None:
     table.add_column("Branch")
     table.add_column("Focus", width=5)
     table.add_column("Tmux", width=5)
-    table.add_column("PR")
+    table.add_column("PR", width=20)
 
     for wt in feature_worktrees:
         session_name = session_name_from_branch(wt.branch)
         focus = "[green]◉[/green]" if wt.branch == focused_branch else "[dim]○[/dim]"
         session = "[green]●[/green]" if session_exists(session_name) else "[dim]○[/dim]"
 
-        # Fetch PR URL
+        # Fetch PR info
         pr_display = "[dim]no PR[/dim]"
         if github_repo:
             try:
                 pr = get_pr_by_branch(wt.branch, github_repo)
                 if pr:
-                    pr_num = pr.url.split("/")[-1]
-                    pr_display = f"[cyan]#{pr_num}[/cyan]"
+                    if pr.state == "merged":
+                        pr_display = f"[magenta]merged[/magenta] [cyan]#{pr.number}[/cyan]"
+                    elif pr.state == "closed":
+                        pr_display = f"[dim]closed #{pr.number}[/dim]"
+                    elif pr.review_decision == ReviewState.APPROVED:
+                        pr_display = f"[green]approved[/green] [cyan]#{pr.number}[/cyan]"
+                    elif pr.review_decision == ReviewState.CHANGES_REQUESTED:
+                        pr_display = f"[red]changes[/red] [cyan]#{pr.number}[/cyan]"
+                    else:
+                        pr_display = f"[yellow]open[/yellow] [cyan]#{pr.number}[/cyan]"
             except Exception:
                 pass
 
