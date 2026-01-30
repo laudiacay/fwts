@@ -23,38 +23,79 @@ Git worktree workflow manager for feature development. Automates creating worktr
 
 ## Installation
 
-### From Homebrew (macOS)
+### From Homebrew (macOS) - Recommended
 
 ```bash
-brew install laudiacay/tap/fwts
+brew tap laudiacay/tap
+brew install fwts
 ```
+
+**Auto-updates:** Since we ship changes frequently, enable auto-update:
+
+```bash
+# Auto-update daily (add to your shell rc file)
+export HOMEBREW_AUTO_UPDATE_SECS=86400
+
+# Or manually update anytime
+brew upgrade fwts
+```
+
+Check for new releases: https://github.com/laudiacay/featurebox/releases
 
 ### From PyPI
 
 ```bash
 pip install fwts
-# or with uv
+# or with uv (recommended for CLI tools)
 uv tool install fwts
+
+# Update with:
+pip install --upgrade fwts
+# or
+uv tool upgrade fwts
 ```
 
 ## Quick Start
 
-1. Initialize global configuration:
+### 1. Run Interactive Setup
+
+fwts includes an interactive setup wizard that guides you through configuration:
+
+**For multi-project setup (recommended):**
 
 ```bash
 fwts init --global
-# Edit ~/.config/fwts/config.toml to add your projects
 ```
 
-2. Or initialize per-repo configuration:
+This will prompt you for:
+- Project names and repo paths
+- GitHub repositories
+- Linear integration (if you use it)
+- Tmux layout preferences (editor, side command)
+- Docker compose integration
+- Custom hooks and columns for the TUI
+
+**For single-project setup:**
 
 ```bash
 cd ~/code/myproject
 fwts init
-# Edit .fwts.toml to configure
 ```
 
-3. Start working on a feature:
+The wizard will auto-detect:
+- Git repository information
+- Default branch (main/dev/master)
+- GitHub remote URL
+
+And prompt you to configure:
+- Worktree base directory
+- Integrations (Linear, Graphite, Docker)
+- Tmux layout (editor, side pane)
+- Claude Code context
+- Lifecycle hooks
+- Custom TUI columns
+
+### 2. Start working on a feature:
 
 ```bash
 # From a Linear ticket
@@ -66,21 +107,21 @@ fwts start #456
 # From a branch name
 fwts start feature/my-feature
 
-# Interactive mode - pick from existing worktrees
+# Interactive mode - pick from existing worktrees or tickets
 fwts start
 ```
 
-4. View all worktrees:
+### 3. View all worktrees:
 
 ```bash
-# Interactive TUI
+# Interactive TUI with status columns
 fwts status
 
 # Simple list
 fwts list
 ```
 
-5. Focus on a worktree (claim shared resources):
+### 4. Focus on a worktree (claim shared resources):
 
 ```bash
 # Focus on a branch
@@ -93,11 +134,13 @@ fwts focus
 fwts focus --clear
 ```
 
-6. Clean up when done:
+### 5. Clean up when done:
 
 ```bash
+# Cleanup specific worktree
 fwts cleanup feature/my-feature
-# Or interactively
+
+# Interactive cleanup with uncommitted changes detection
 fwts cleanup
 ```
 
@@ -252,6 +295,61 @@ on_unfocus = ["echo 'Releasing resources'"]  # Run when losing focus
 ```
 
 Only one worktree per project can have focus at a time. The TUI shows focus status with a ◉ indicator.
+
+## Advanced Features
+
+### Custom TUI Columns and Hooks
+
+Add custom status columns to the TUI dashboard by defining hooks in your config:
+
+```toml
+[[tui.columns]]
+name = "CI"
+hook = "gh run list --branch $BRANCH_NAME --limit 1 --json conclusion -q '.[0].conclusion'"
+color_map = { success = "green", failure = "red", pending = "yellow", null = "dim" }
+
+[[tui.columns]]
+name = "Review"
+hook = "gh pr view $BRANCH_NAME --json reviewDecision -q '.reviewDecision' 2>/dev/null || echo 'none'"
+color_map = { APPROVED = "green", CHANGES_REQUESTED = "red", REVIEW_REQUIRED = "yellow" }
+
+[[tui.columns]]
+name = "Checks"
+hook = "gh pr checks $BRANCH_NAME 2>/dev/null | grep -c '✓' || echo '0'"
+```
+
+Hooks have access to these environment variables:
+- `$BRANCH_NAME` - The worktree's branch name
+- `$WORKTREE_PATH` - Path to the worktree
+- `$MAIN_REPO` - Path to the main repository
+
+### Lifecycle Commands
+
+Run commands automatically during worktree lifecycle:
+
+```toml
+[lifecycle]
+# Run after worktree creation
+post_create = ["npm install", "cp .env.example .env"]
+
+# Run when starting a worktree
+on_start = ["just up", "just migrate"]
+
+# Run when cleaning up
+on_cleanup = ["just down", "just clean-cache"]
+```
+
+### Per-Worktree Overrides
+
+Create `.fwts.local.toml` in any worktree to override settings just for that worktree:
+
+```toml
+[tmux]
+editor = "code ."  # Use VS Code instead of neovim for this worktree
+
+[docker]
+enabled = false  # Don't start docker for this worktree
+```
 
 ## Shell Completions
 
