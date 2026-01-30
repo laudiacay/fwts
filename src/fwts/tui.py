@@ -250,9 +250,8 @@ class FeatureboxTUI:
         # PR column - wider to show status properly
         table.add_column("PR", width=20)
 
-        if self.loading and not self.worktrees:
-            table.add_row("[dim]Loading...[/dim]")
-            return table
+        # Don't show loading state in table - handled by status message
+        # Just show empty state if no data yet
 
         if not self.worktrees:
             table.add_row("[dim]No feature worktrees found[/dim]")
@@ -353,9 +352,8 @@ class FeatureboxTUI:
         table.add_column("Local", width=5)  # Local worktree indicator
         table.add_column("PR", width=16)  # PR status
 
-        if self.loading and not self.tickets:
-            table.add_row("[dim]Loading...[/dim]")
-            return table
+        # Don't show loading state in table - handled by status message
+        # Just show empty state if no data yet
 
         if not self.tickets:
             table.add_row("[dim]No tickets found[/dim]")
@@ -450,10 +448,11 @@ class FeatureboxTUI:
         """Render status line."""
         status = Text()
 
-        if self.status_message:
+        if self.loading:
+            # Always show loading state prominently
+            status.append("⟳ Loading data...", style="bold yellow")
+        elif self.status_message:
             status.append(self.status_message, style=self.status_style)
-        elif self.loading:
-            status.append("⟳ Refreshing...", style="yellow")
         else:
             # Show time since last refresh
             elapsed = int(time.time() - self.last_refresh)
@@ -499,15 +498,31 @@ class FeatureboxTUI:
         item = items[self.cursor]
 
         if self.mode == TUIMode.WORKTREES:
-            # Open PR URL
-            if isinstance(item, WorktreeInfo) and item.pr_url and item.pr_info:
-                try:
-                    subprocess.run(["open", item.pr_url], check=False)
-                    self.set_status(f"Opened PR #{item.pr_info.number}", "green")
-                except Exception:
-                    webbrowser.open(item.pr_url)
-            else:
-                self.set_status("No PR for this worktree", "yellow")
+            # Open PR URL or create one
+            if isinstance(item, WorktreeInfo):
+                if item.pr_url and item.pr_info:
+                    # PR exists - open it
+                    try:
+                        subprocess.Popen(
+                            ["open", item.pr_url],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        self.set_status(f"Opened PR #{item.pr_info.number}", "green")
+                    except Exception:
+                        webbrowser.open(item.pr_url)
+                else:
+                    # No PR - create one
+                    try:
+                        subprocess.Popen(
+                            ["gh", "pr", "create", "--web"],
+                            cwd=item.worktree.path,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        self.set_status("Opening PR creation page...", "yellow")
+                    except Exception as e:
+                        self.set_status(f"Failed to open PR creation: {e}", "red")
         else:
             # Ticket modes
             if isinstance(item, TicketInfo):
@@ -519,7 +534,11 @@ class FeatureboxTUI:
                     url = item.url
                     label = item.identifier
                 try:
-                    subprocess.run(["open", url], check=False)
+                    subprocess.Popen(
+                        ["open", url],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
                     self.set_status(f"Opened {label}", "green")
                 except Exception:
                     webbrowser.open(url)
