@@ -103,7 +103,7 @@ async def get_ticket(identifier: str, api_key: str | None = None) -> TicketInfo:
     }
     """
 
-    # If it's just a number, we need a different query
+    # If it's just a number, we need to search by number
     if identifier.isdigit():
         query = """
         query IssueByNumber($number: Float!) {
@@ -122,25 +122,25 @@ async def get_ticket(identifier: str, api_key: str | None = None) -> TicketInfo:
         }
         """
         variables = {"number": int(identifier)}
+        result_path = "issues"
     else:
-        # Query by identifier
+        # Query directly by identifier (e.g., "SUP-123")
         query = """
-        query IssueByIdentifier($identifier: String!) {
-            issueSearch(query: $identifier, first: 1) {
-                nodes {
-                    id
-                    identifier
-                    title
-                    branchName
-                    url
-                    state {
-                        type
-                    }
+        query IssueByIdentifier($id: String!) {
+            issue(id: $id) {
+                id
+                identifier
+                title
+                branchName
+                url
+                state {
+                    type
                 }
             }
         }
         """
-        variables = {"identifier": identifier}
+        variables = {"id": identifier}
+        result_path = "issue"
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -161,17 +161,15 @@ async def get_ticket(identifier: str, api_key: str | None = None) -> TicketInfo:
             raise LinearError(f"Linear query error: {data['errors']}")
 
         # Extract issue from response
-        if "issueSearch" in data.get("data", {}):
-            nodes = data["data"]["issueSearch"]["nodes"]
-        elif "issues" in data.get("data", {}):
-            nodes = data["data"]["issues"]["nodes"]
+        if result_path == "issue":
+            issue = data.get("data", {}).get("issue")
+            if not issue:
+                raise LinearError(f"Ticket not found: {identifier}")
         else:
-            nodes = []
-
-        if not nodes:
-            raise LinearError(f"Ticket not found: {identifier}")
-
-        issue = nodes[0]
+            nodes = data.get("data", {}).get("issues", {}).get("nodes", [])
+            if not nodes:
+                raise LinearError(f"Ticket not found: {identifier}")
+            issue = nodes[0]
 
         state_type = issue.get("state", {}).get("type", "backlog").lower()
         state_map = {
