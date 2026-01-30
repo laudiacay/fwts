@@ -89,6 +89,7 @@ class FeatureboxTUI:
         self.tickets: list[TicketInfo] = []
         self.selected: set[int] = set()
         self.cursor: int = 0
+        self.viewport_start: int = 0
         self.running = True
         self.needs_refresh = True
         self.loading = False
@@ -96,6 +97,11 @@ class FeatureboxTUI:
         self.status_style: str = "dim"
         self.last_refresh: float = 0
         self._refresh_lock = threading.Lock()
+
+    @property
+    def viewport_size(self) -> int:
+        """Number of items to show in viewport."""
+        return 15
 
     def _get_feature_worktrees(self) -> list[Worktree]:
         """Get worktrees excluding main repo."""
@@ -230,8 +236,14 @@ class FeatureboxTUI:
         focused_branch = get_focused_branch(self.config)
         focus_info = f" [green]◉ {focused_branch}[/green]" if focused_branch else ""
 
+        # Add scroll indicator to title if there are more items than viewport
+        scroll_info = ""
+        if len(self.worktrees) > self.viewport_size:
+            viewport_end = min(self.viewport_start + self.viewport_size, len(self.worktrees))
+            scroll_info = f" [dim](showing {self.viewport_start + 1}-{viewport_end} of {len(self.worktrees)})[/dim]"
+
         table = Table(
-            title=f"[bold]{project_name}[/bold]{focus_info} [dim](worktrees)[/dim]",
+            title=f"[bold]{project_name}[/bold]{focus_info} [dim](worktrees)[/dim]{scroll_info}",
             show_header=True,
             header_style="bold cyan",
             border_style="dim",
@@ -257,7 +269,12 @@ class FeatureboxTUI:
             table.add_row("[dim]No feature worktrees found[/dim]")
             return table
 
-        for idx, info in enumerate(self.worktrees):
+        # Calculate viewport range
+        viewport_end = min(self.viewport_start + self.viewport_size, len(self.worktrees))
+
+        for idx in range(self.viewport_start, viewport_end):
+            info = self.worktrees[idx]
+
             # Cursor and selection
             cursor_char = ">" if idx == self.cursor else " "
             selected = "✓" if idx in self.selected else " "
@@ -338,8 +355,14 @@ class FeatureboxTUI:
         }
         mode_name = mode_names.get(self.mode, "tickets")
 
+        # Add scroll indicator to title if there are more items than viewport
+        scroll_info = ""
+        if len(self.tickets) > self.viewport_size:
+            viewport_end = min(self.viewport_start + self.viewport_size, len(self.tickets))
+            scroll_info = f" [dim](showing {self.viewport_start + 1}-{viewport_end} of {len(self.tickets)})[/dim]"
+
         table = Table(
-            title=f"[bold]Linear Tickets[/bold] [dim]({mode_name})[/dim]",
+            title=f"[bold]Linear Tickets[/bold] [dim]({mode_name})[/dim]{scroll_info}",
             show_header=True,
             header_style="bold cyan",
             border_style="dim",
@@ -359,7 +382,11 @@ class FeatureboxTUI:
             table.add_row("[dim]No tickets found[/dim]")
             return table
 
-        for idx, ticket in enumerate(self.tickets):
+        # Calculate viewport range
+        viewport_end = min(self.viewport_start + self.viewport_size, len(self.tickets))
+
+        for idx in range(self.viewport_start, viewport_end):
+            ticket = self.tickets[idx]
             prefix = ">" if idx == self.cursor else " "
 
             # Color state based on type
@@ -548,6 +575,7 @@ class FeatureboxTUI:
         if new_mode != self.mode:
             self.mode = new_mode
             self.cursor = 0
+            self.viewport_start = 0
             self.selected.clear()
             self.needs_refresh = True
 
@@ -589,8 +617,14 @@ class FeatureboxTUI:
         # Navigation
         if key in ("j", KEY_DOWN):
             self.cursor = min(self.cursor + 1, len(items) - 1) if items else 0
+            # Scroll down if cursor moves below viewport
+            if self.cursor >= self.viewport_start + self.viewport_size:
+                self.viewport_start = self.cursor - self.viewport_size + 1
         elif key in ("k", KEY_UP):
             self.cursor = max(self.cursor - 1, 0)
+            # Scroll up if cursor moves above viewport
+            if self.cursor < self.viewport_start:
+                self.viewport_start = self.cursor
 
         # Open URL
         elif key in ("o", "O"):
