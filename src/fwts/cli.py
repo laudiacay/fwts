@@ -14,11 +14,10 @@ from fwts import __version__
 from fwts.completions import generate_bash, generate_fish, generate_zsh, install_completion
 from fwts.config import (
     Config,
-    generate_example_config,
-    generate_global_config_example,
     list_projects,
     load_config,
 )
+from fwts.setup import interactive_setup
 from fwts.focus import (
     focus_worktree,
     get_focus_state,
@@ -385,7 +384,7 @@ def init(
         typer.Option("--global", "-g", help="Initialize global config instead"),
     ] = False,
 ) -> None:
-    """Initialize fwts configuration.
+    """Interactive setup for fwts configuration.
 
     Without --global: Creates .fwts.toml in current repo.
     With --global: Creates ~/.config/fwts/config.toml with named projects.
@@ -400,11 +399,12 @@ def init(
             if not typer.confirm("Overwrite?"):
                 raise typer.Exit()
 
-        config_file.write_text(generate_global_config_example())
+        config_content = interactive_setup(config_dir, is_global=True)
+        config_file.write_text(config_content)
+        console.print()
         console.print(f"[green]Created {config_file}[/green]")
-        console.print("[dim]Edit the file to add your projects.[/dim]")
     else:
-        target_dir = path or Path.cwd()
+        target_dir = (path or Path.cwd()).resolve()
         config_file = target_dir / ".fwts.toml"
 
         if config_file.exists():
@@ -412,9 +412,16 @@ def init(
             if not typer.confirm("Overwrite?"):
                 raise typer.Exit()
 
-        config_file.write_text(generate_example_config())
+        config_content = interactive_setup(target_dir, is_global=False)
+        config_file.write_text(config_content)
+        console.print()
         console.print(f"[green]Created {config_file}[/green]")
-        console.print("[dim]Edit the file to configure your project settings.[/dim]")
+
+    console.print()
+    console.print("[bold]Next steps:[/bold]")
+    console.print("  1. Review and edit the config file as needed")
+    console.print("  2. Run [cyan]fwts status[/cyan] to see your worktrees")
+    console.print("  3. Run [cyan]fwts start <branch>[/cyan] to create a worktree")
 
 
 @app.command()

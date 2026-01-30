@@ -256,8 +256,9 @@ class FeatureboxTUI:
         table.add_column("Focus", width=5)
         table.add_column("Tmux", width=5)
 
-        # Add hook columns
+        # Add hook columns (filter out any named "PR" since we add that explicitly)
         hooks = self.config.tui.columns if self.config.tui.columns else get_builtin_hooks()
+        hooks = [h for h in hooks if h.name.upper() != "PR"]
         for hook in hooks:
             table.add_column(hook.name, width=12)
 
@@ -715,7 +716,7 @@ class FeatureboxTUI:
             live.update(self._render(), refresh=True)
 
             try:
-                self._cleanup_func(info.worktree, self.config)
+                self._cleanup_func(info.worktree, self.config, force=True)
                 self.set_status(f"✓ Cleaned up: {branch}", style="green")
             except Exception as e:
                 self.set_status(f"✗ Failed: {branch} - {e}", style="red")
