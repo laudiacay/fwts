@@ -33,7 +33,8 @@
       "Bash(find:*)",
       "Bash(git checkout:*)",
       "Bash(pip index:*)",
-      "Bash(ln:*)"
+      "Bash(ln:*)",
+      "Bash(/opt/homebrew/Cellar/fwts/0.1.23/libexec/bin/python3:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

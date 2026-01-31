@@ -142,8 +142,17 @@ class FeatureboxTUI:
 
             new_worktrees.append(info)
 
-        # Get hooks (configured + builtin)
-        hooks = self.config.tui.columns if self.config.tui.columns else get_builtin_hooks()
+        # Get hooks (builtin + custom, custom overrides builtin with same name)
+        builtin_hooks = get_builtin_hooks()
+        if self.config.tui.columns:
+            # Start with custom columns
+            custom_names = {h.name.lower() for h in self.config.tui.columns}
+            # Add builtins that don't conflict with custom
+            hooks = [h for h in builtin_hooks if h.name.lower() not in custom_names]
+            # Add all custom columns
+            hooks.extend(self.config.tui.columns)
+        else:
+            hooks = builtin_hooks
 
         # Run hooks in parallel
         if hooks and worktrees:
@@ -252,18 +261,26 @@ class FeatureboxTUI:
             show_header=True,
             header_style="bold cyan",
             border_style="dim",
+            expand=False,
         )
 
         table.add_column("", width=3)  # Selection/cursor
-        table.add_column("Branch", style="bold")
+        table.add_column("Branch", style="bold", width=40)
         table.add_column("Focus", width=5)
         table.add_column("Tmux", width=5)
 
-        # Add hook columns (filter out any named "PR" since we add that explicitly)
-        hooks = self.config.tui.columns if self.config.tui.columns else get_builtin_hooks()
+        # Add hook columns (builtin + custom, custom overrides builtin with same name)
+        builtin_hooks = get_builtin_hooks()
+        if self.config.tui.columns:
+            custom_names = {h.name.lower() for h in self.config.tui.columns}
+            hooks = [h for h in builtin_hooks if h.name.lower() not in custom_names]
+            hooks.extend(self.config.tui.columns)
+        else:
+            hooks = builtin_hooks
+        # Filter out any named "PR" since we add that explicitly
         hooks = [h for h in hooks if h.name.upper() != "PR"]
         for hook in hooks:
-            table.add_column(hook.name, width=12)
+            table.add_column(hook.name, width=10)
 
         # PR column - wider to show status properly
         table.add_column("PR", width=20)
@@ -345,7 +362,7 @@ class FeatureboxTUI:
             elif pr.review_decision == ReviewState.CHANGES_REQUESTED:
                 parts.append(("changes", "red"))
             elif pr.review_decision == ReviewState.PENDING:
-                parts.append(("review", "yellow"))
+                parts.append(("in review", "yellow"))
             else:
                 parts.append(("open", "yellow"))
 
@@ -376,11 +393,12 @@ class FeatureboxTUI:
             show_header=True,
             header_style="bold cyan",
             border_style="dim",
+            expand=False,
         )
 
         table.add_column("", width=2)
         table.add_column("ID", style="cyan", width=10)
-        table.add_column("Title", style="bold")
+        table.add_column("Title", style="bold", width=50)
         table.add_column("State", width=14)
         table.add_column("Local", width=5)  # Local worktree indicator
         table.add_column("PR", width=16)  # PR status
