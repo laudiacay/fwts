@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(fwts start:*)",
+      "mcp__plugin_linear_linear__list_issues",
+      "Bash(fwts cleanup --help:*)",
+      "Bash(gh pr view:*)",
+      "mcp__plugin_linear_linear__get_issue",
+      "Bash(git log:*)",
+      "Bash(python3:*)",
+      "Bash(source:*)",
+      "Bash(git worktree:*)",
+      "Bash(git worktree remove:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(git push:*)",
+      "Bash(gh release create:*)",
+      "Bash(brew formula:*)",
+      "Bash(brew --prefix:*)",
+      "Bash(brew info:*)",
+      "Bash(curl:*)",
+      "Bash(shasum:*)",
+      "Bash(brew upgrade:*)",
+      "Bash(fwts:*)",
+      "Bash(brew link:*)",
+      "Bash(brew unlink:*)",
+      "Bash(/opt/homebrew/Cellar/fwts/0.1.18/libexec/bin/pip list:*)",
+      "Bash(/opt/homebrew/Cellar/fwts/0.1.18/libexec/bin/python:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run:*)",
+      "Bash(brew postinstall:*)",
+      "Bash(find:*)",
+      "Bash(git checkout:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "spawner"
+  ]
+}

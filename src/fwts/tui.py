@@ -270,10 +270,13 @@ class FeatureboxTUI:
 
         # Show loading state or empty state
         if not self.worktrees:
+            # Calculate number of columns for proper rendering
+            num_hook_cols = len(hooks)
+            empty_cols = [""] * (3 + num_hook_cols)  # cursor, focus, tmux, hooks
             if self.loading:
-                table.add_row("[yellow]⟳ Loading worktrees...[/yellow]")
+                table.add_row("", "[yellow]⟳ Loading worktrees...[/yellow]", *empty_cols)
             else:
-                table.add_row("[dim]No feature worktrees found[/dim]")
+                table.add_row("", "[dim]No feature worktrees found[/dim]", *empty_cols)
             return table
 
         # Calculate viewport range
@@ -385,9 +388,9 @@ class FeatureboxTUI:
         # Show loading state or empty state
         if not self.tickets:
             if self.loading:
-                table.add_row("[yellow]⟳ Loading tickets from Linear...[/yellow]")
+                table.add_row("", "", "[yellow]⟳ Loading tickets from Linear...[/yellow]", "", "", "")
             else:
-                table.add_row("[dim]No tickets found[/dim]")
+                table.add_row("", "", "[dim]No tickets found[/dim]", "", "", "")
             return table
 
         # Calculate viewport range
