@@ -453,6 +453,8 @@ class FeatureboxTUI:
             help_text.append(" focus  ")
             help_text.append("d", style="bold")
             help_text.append(" cleanup  ")
+            help_text.append("l", style="bold")
+            help_text.append(" unpushed  ")
             help_text.append("o", style="bold")
             help_text.append(" open PR  ")
         else:
@@ -667,6 +669,9 @@ class FeatureboxTUI:
                 return None
             elif key in ("f", "F"):
                 return "focus"
+            elif key in ("l", "L"):
+                self._show_unpushed_commits()
+                return None
         else:
             # Ticket modes
             if key in ("\r", "\n"):
@@ -834,6 +839,36 @@ class FeatureboxTUI:
 
         self.clear_status()
         live.update(self._render(), refresh=True)
+
+    def _show_unpushed_commits(self) -> None:
+        """Show unpushed commits for the selected worktree."""
+        if not self.worktrees or self.cursor >= len(self.worktrees):
+            self.set_status("No worktree selected", "yellow")
+            return
+
+        from fwts.git import get_unpushed_commits
+
+        info = self.worktrees[self.cursor]
+        count, summary = get_unpushed_commits(cwd=info.worktree.path)
+
+        if count == 0:
+            if summary == "no upstream":
+                self.set_status(
+                    f"{info.worktree.branch}: No upstream branch configured",
+                    "yellow",
+                )
+            else:
+                self.set_status(f"{info.worktree.branch}: All commits pushed", "green")
+        else:
+            # Format the summary to show in status
+            lines = summary.split("\n")
+            preview = "\n".join(lines[:5])  # Show first 5 commits
+            if len(lines) > 5:
+                preview += f"\n... and {len(lines) - 5} more"
+            self.set_status(
+                f"{info.worktree.branch}: {count} unpushed commit{'s' if count > 1 else ''}:\n{preview}",
+                "cyan",
+            )
 
     def _get_key_with_timeout(self, timeout: float = 0.5) -> str | None:
         """Get keyboard input with timeout.

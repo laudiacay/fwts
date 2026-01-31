@@ -128,6 +128,29 @@ def get_builtin_hooks() -> list[ColumnHook]:
     """Get built-in column hooks that work without configuration."""
     return [
         ColumnHook(
+            name="Local",
+            # Check for unpushed commits
+            # Output: "↑N" where N is number of commits, "synced", "no upstream"
+            hook='''
+                upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
+                if [ -z "$upstream" ]; then
+                    echo "no upstream"
+                    exit 0
+                fi
+                count=$(git rev-list --count "$upstream..HEAD" 2>/dev/null)
+                if [ -z "$count" ] || [ "$count" = "0" ]; then
+                    echo "synced"
+                else
+                    echo "↑$count"
+                fi
+            ''',
+            color_map={
+                "synced": "dim",
+                "no upstream": "yellow",
+                "↑": "cyan",  # Partial match for ↑N
+            },
+        ),
+        ColumnHook(
             name="CI",
             # Check PR required checks status, fall back to workflow runs
             # Output: "pass", "fail", "req-fail" (required failed), "pending", "none"

@@ -31,7 +31,9 @@
       "Bash(gh run:*)",
       "Bash(brew postinstall:*)",
       "Bash(find:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(pip index:*)",
+      "Bash(ln:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

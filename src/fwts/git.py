@@ -286,3 +286,44 @@ def get_worktree_diff(cwd: Path | None = None, max_lines: int = 50) -> str:
             parts.append("\n".join(lines))
 
     return "\n".join(parts) if parts else "No changes"
+
+
+def get_unpushed_commits(cwd: Path | None = None) -> tuple[int, str]:
+    """Get count and summary of unpushed commits.
+
+    Args:
+        cwd: Worktree path
+
+    Returns:
+        Tuple of (count, summary) where summary is one-line commit messages
+    """
+    # Get upstream branch
+    result = run_git(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        cwd=cwd,
+        check=False,
+    )
+    if result.returncode != 0:
+        # No upstream configured
+        return (0, "no upstream")
+
+    upstream = result.stdout.strip()
+
+    # Count commits ahead
+    result = run_git(["rev-list", "--count", f"{upstream}..HEAD"], cwd=cwd, check=False)
+    if result.returncode != 0:
+        return (0, "")
+
+    count = int(result.stdout.strip()) if result.stdout.strip().isdigit() else 0
+    if count == 0:
+        return (0, "")
+
+    # Get commit summaries
+    result = run_git(
+        ["log", "--oneline", f"{upstream}..HEAD"],
+        cwd=cwd,
+        check=False,
+    )
+    summary = result.stdout.strip() if result.returncode == 0 else ""
+
+    return (count, summary)
