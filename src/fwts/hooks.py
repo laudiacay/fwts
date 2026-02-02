@@ -246,4 +246,56 @@ def get_builtin_hooks() -> list[ColumnHook]:
             },
         ),
         # Note: PR status is now handled inline in the TUI, not as a hook
+        ColumnHook(
+            name="Claude",
+            # Check Claude status in tmux session
+            # Output: "typing", "waiting", "idle", "off"
+            hook='''
+                # Convert branch name to session name (replace / and . with -)
+                session=$(echo "$BRANCH_NAME" | sed 's/[\/.]/-/g')
+
+                # Check if session exists
+                if ! tmux has-session -t "$session" 2>/dev/null; then
+                    echo "off"
+                    exit 0
+                fi
+
+                # Check if claude process is running in the session
+                pane_pid=$(tmux list-panes -t "$session" -F '#{pane_pid}' 2>/dev/null | head -1)
+                if [ -z "$pane_pid" ]; then
+                    echo "off"
+                    exit 0
+                fi
+
+                # Check for claude process in the pane's process tree
+                if pgrep -P "$pane_pid" -f "claude" >/dev/null 2>&1; then
+                    # Claude is running - check if it's actively generating
+                    # Capture recent pane content
+                    content=$(tmux capture-pane -t "$session" -p -S -5 2>/dev/null | tail -5)
+
+                    # Check for thinking/typing indicators
+                    if echo "$content" | grep -qE '(⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Thinking|typing|\.\.\.|\[.*\])'; then
+                        echo "typing"
+                    elif echo "$content" | grep -qE '(❯|>|\$|claude>)[ ]*$'; then
+                        echo "waiting"
+                    else
+                        echo "typing"
+                    fi
+                else
+                    # No claude process - check if at prompt
+                    content=$(tmux capture-pane -t "$session" -p -S -2 2>/dev/null | tail -2)
+                    if echo "$content" | grep -qE '(❯|>|\$)[ ]*$'; then
+                        echo "idle"
+                    else
+                        echo "idle"
+                    fi
+                fi
+            ''',
+            color_map={
+                "typing": "green",
+                "waiting": "yellow",
+                "idle": "dim",
+                "off": "dim",
+            },
+        ),
     ]
