@@ -356,6 +356,46 @@ def focus(
 
 
 @app.command()
+def statusline(
+    project: ProjectOption = None,
+    config_path: ConfigOption = None,
+) -> None:
+    """Output compact status for shell/statusline integration.
+
+    Prints a single line with focused worktree and brief status.
+    Designed for use in shell prompts or Claude Code statusline.
+    """
+    try:
+        config = _get_config(project, config_path)
+    except Exception:
+        # No config found, output nothing
+        return
+
+    main_repo = config.project.main_repo.expanduser().resolve()
+    worktrees = list_worktrees(main_repo)
+    feature_worktrees = [
+        wt for wt in worktrees if not wt.is_bare and wt.branch != config.project.base_branch
+    ]
+
+    # Get focus info
+    focused = get_focused_branch(config)
+
+    parts = []
+
+    # Show focused worktree
+    if focused:
+        parts.append(f"🎯{focused}")
+
+    # Show worktree count
+    wt_count = len(feature_worktrees)
+    if wt_count > 0:
+        parts.append(f"{wt_count}wt")
+
+    if parts:
+        print(" ".join(parts))
+
+
+@app.command()
 def projects() -> None:
     """List configured projects from global config."""
     project_names = list_projects()
