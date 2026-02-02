@@ -11,6 +11,7 @@ import anyio
 
 from fwts.config import ColumnHook
 from fwts.git import Worktree
+from fwts.paths import get_global_hooks_dir
 
 
 @dataclass
@@ -45,13 +46,13 @@ async def run_hook(
     # Determine if hook is a script file or inline command
     hook_cmd = hook.hook
     hooks_dir = worktree.path / ".fwts" / "hooks"
-    global_hooks_dir = Path.home() / ".config" / "fwts" / "hooks"
+    global_hooks = get_global_hooks_dir()
 
     # Check for script file
     if not hook_cmd.startswith("/") and " " not in hook_cmd.split()[0]:
         # Might be a script name, check locations
         script_name = hook_cmd.split()[0]
-        for dir in [hooks_dir, global_hooks_dir]:
+        for dir in [hooks_dir, global_hooks]:
             script_path = dir / script_name
             if script_path.exists():
                 hook_cmd = str(script_path)

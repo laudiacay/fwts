@@ -28,6 +28,7 @@ from fwts.git import list_worktrees
 from fwts.github import get_branch_from_pr, has_gh_cli
 from fwts.lifecycle import full_cleanup, full_setup, get_worktree_for_input
 from fwts.linear import get_branch_from_ticket
+from fwts.paths import ensure_config_dir, get_global_config_path
 from fwts.tmux import attach_session, session_exists, session_name_from_branch
 from fwts.tui import FeatureboxTUI, TicketInfo, TUIMode, simple_list
 
@@ -413,7 +414,8 @@ def projects() -> None:
     project_names = list_projects()
 
     if not project_names:
-        console.print("[dim]No projects configured in ~/.config/fwts/config.toml[/dim]")
+        config_path = get_global_config_path()
+        console.print(f"[dim]No projects configured in {config_path}[/dim]")
         console.print("[dim]Run 'fwts init --global' to create global config[/dim]")
         return
 
@@ -447,11 +449,10 @@ def init(
     """Interactive setup for fwts configuration.
 
     Without --global: Creates .fwts.toml in current repo.
-    With --global: Creates ~/.config/fwts/config.toml with named projects.
+    With --global: Creates global config (respects XDG_CONFIG_HOME).
     """
     if global_config:
-        config_dir = Path.home() / ".config" / "fwts"
-        config_dir.mkdir(parents=True, exist_ok=True)
+        config_dir = ensure_config_dir()
         config_file = config_dir / "config.toml"
 
         if config_file.exists():

@@ -13,6 +13,12 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib  # type: ignore[import-not-found]
 
+# Import paths module - but handle circular import by deferring
+def _get_global_config_path() -> Path:
+    """Get global config path (avoids circular import)."""
+    from fwts.paths import get_global_config_path
+    return get_global_config_path()
+
 
 @dataclass
 class TmuxConfig:
@@ -96,11 +102,22 @@ class TuiConfig:
 
 @dataclass
 class ClaudeConfig:
-    """Claude initialization configuration."""
+    """Claude initialization configuration.
+
+    Opinionated defaults for context gathering:
+    - Reads CLAUDE.md for project-specific instructions
+    - Shows recent git history for context
+    - Includes ticket info when starting from Linear
+    """
 
     enabled: bool = True
     # Commands to run to gather context (output is piped to claude)
-    context_commands: list[str] = field(default_factory=list)
+    # Opinionated defaults: CLAUDE.md + recent commits
+    context_commands: list[str] = field(default_factory=lambda: [
+        "cat CLAUDE.md 2>/dev/null || cat .claude/CLAUDE.md 2>/dev/null || true",
+        "echo '## Recent commits on this branch:' && git log --oneline -10 2>/dev/null || true",
+        "echo '## Current git status:' && git status --short 2>/dev/null || true",
+    ])
     # Initial prompt/instructions to send to claude after context
     init_instructions: str = ""
     # Template for the full init message (use {context} and {ticket} placeholders)
@@ -287,9 +304,12 @@ def parse_config(data: dict[str, Any]) -> Config:
     tui = TuiConfig(columns=_parse_column_hooks(tui_data.get("columns", [])))
 
     claude_data = data.get("claude", {})
+    # Use defaults from ClaudeConfig if not explicitly set
+    default_claude = ClaudeConfig()
     claude = ClaudeConfig(
         enabled=claude_data.get("enabled", True),
-        context_commands=claude_data.get("context_commands", []),
+        # Only override context_commands if explicitly set in config
+        context_commands=claude_data.get("context_commands", default_claude.context_commands),
         init_instructions=claude_data.get("init_instructions", ""),
         init_template=claude_data.get("init_template", ""),
     )
@@ -356,11 +376,11 @@ def load_config(
         worktree_path: Worktree path for local config (auto-detected if not provided)
 
     Config loading order (later overrides earlier):
-    1. Global config (~/.config/fwts/config.toml)
+    1. Global config ($XDG_CONFIG_HOME/fwts/config.toml or ~/.config/fwts/config.toml)
     2. Main repo config (<main_repo>/.fwts.toml)
     3. Worktree local config (<worktree>/.fwts.local.toml)
     """
-    global_config_path = Path.home() / ".config" / "fwts" / "config.toml"
+    global_config_path = _get_global_config_path()
     sources: list[Path] = []
     merged_data: dict[str, Any] = {}
 
@@ -449,7 +469,7 @@ def load_config(
 
 def load_global_config() -> GlobalConfig:
     """Load the global configuration with all named projects."""
-    global_config_path = Path.home() / ".config" / "fwts" / "config.toml"
+    global_config_path = _get_global_config_path()
     if not global_config_path.exists():
         return GlobalConfig()
 
@@ -526,13 +546,17 @@ compose_file = "docker-compose.yml"
 
 [claude]
 enabled = true
-# Commands to gather context before starting Claude
-context_commands = [
-    "cat CLAUDE.md 2>/dev/null || true",
-    "git log --oneline -5",
-]
-# Initial instructions for Claude
-init_instructions = "You are working on this feature. Review the context above and help me implement it."
+# Context gathering is OPINIONATED by default - no config needed!
+# Default: reads CLAUDE.md, shows recent commits, includes git status
+#
+# Only override if you need custom context:
+# context_commands = [
+#     "cat CLAUDE.md 2>/dev/null || true",
+#     "cat docs/ARCHITECTURE.md 2>/dev/null || true",
+# ]
+#
+# Add instructions after context:
+# init_instructions = "Focus on test coverage."
 # Or use a template with placeholders:
 # init_template = \"\"\"
 # Ticket: {ticket}

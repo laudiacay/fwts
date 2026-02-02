@@ -18,11 +18,9 @@ from rich.console import Console
 
 from fwts.config import Config, FocusConfig
 from fwts.git import Worktree
+from fwts.paths import get_state_dir
 
 console = Console()
-
-# State directory for focus tracking
-STATE_DIR = Path.home() / ".local" / "state" / "fwts"
 
 
 @dataclass
@@ -56,10 +54,11 @@ class FocusState:
 
 def _state_file(project_name: str) -> Path:
     """Get the state file path for a project."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    state_dir = get_state_dir()
+    state_dir.mkdir(parents=True, exist_ok=True)
     # Sanitize project name for filename
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in project_name)
-    return STATE_DIR / f"{safe_name}.json"
+    return state_dir / f"{safe_name}.json"
 
 
 def get_focus_state(config: Config) -> FocusState:

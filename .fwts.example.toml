@@ -77,3 +77,20 @@ compose_file = "docker-compose.yml"
 # name = "Conflicts"
 # hook = ".fwts/hooks/check-conflicts.sh"  # Custom script
 # color_map = { clean = "green", conflicts = "red" }
+
+# Claude context gathering is OPINIONATED by default:
+# - Reads CLAUDE.md or .claude/CLAUDE.md for project instructions
+# - Shows last 10 commits on the branch
+# - Shows current git status
+# - Includes Linear ticket info when starting from a ticket
+#
+# You usually don't need to configure this! The defaults work well.
+# Only override if you have special needs:
+#
+# [claude]
+# enabled = true
+# context_commands = [
+#     "cat CLAUDE.md 2>/dev/null || true",
+#     "cat docs/CONTRIBUTING.md 2>/dev/null || true",
+# ]
+# init_instructions = "Focus on maintaining backwards compatibility."
