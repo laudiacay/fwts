@@ -381,7 +381,9 @@ def statusline(
     try:
         config = _get_config(project, config_path)
     except Exception:
-        # No config found, output nothing
+        # No config found - show current directory basename
+        import os
+        print(f"📁{os.path.basename(os.getcwd())}")
         return
 
     main_repo = config.project.main_repo.expanduser().resolve()
