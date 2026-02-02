@@ -15,8 +15,8 @@
             --bg-tertiary: #f5f5f4;
             --text: #1c1917;
             --text-muted: #78716c;
-            --accent: #0d9488;
-            --accent-dim: #0f766e;
+            --accent: #8c6d4a;
+            --accent-dim: #7a5f40;
             --border: #e7e5e4;
             --sidebar-width: 260px;
         }
@@ -108,7 +108,7 @@
 
         .nav-link.active {
             color: var(--accent);
-            background: rgba(13, 148, 136, 0.1);
+            background: rgba(140, 109, 74, 0.1);
         }
 
         .sidebar-footer {
@@ -178,7 +178,7 @@
             left: 0;
             width: 600px;
             height: 600px;
-            background: radial-gradient(circle, rgba(13, 148, 136, 0.08) 0%, transparent 70%);
+            background: radial-gradient(circle, rgba(140, 109, 74, 0.08) 0%, transparent 70%);
             pointer-events: none;
         }
 
@@ -190,7 +190,7 @@
         }
 
         .hero-title span {
-            background: linear-gradient(135deg, var(--accent), #14b8a6);
+            background: linear-gradient(135deg, var(--accent), #a67c52);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -399,6 +399,31 @@
             color: var(--accent);
         }
 
+        .copy-prompt {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin-top: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--accent);
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .copy-prompt:hover {
+            border-color: var(--accent);
+        }
+
+        .copy-prompt svg {
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
         /* Comparison */
         .comparison-table {
             width: 100%;
@@ -432,7 +457,7 @@
         }
 
         .highlight-col {
-            background: rgba(13, 148, 136, 0.08);
+            background: rgba(140, 109, 74, 0.08);
         }
 
         .check { color: #16a34a; }
@@ -589,7 +614,6 @@
                 <div class="nav-section-title">Features</div>
                 <a href="#core-features" class="nav-link">Core Features</a>
                 <a href="#integrations" class="nav-link">Integrations</a>
-                <a href="#claude-setup" class="nav-link">Claude Code Setup</a>
                 <a href="#tui" class="nav-link">Interactive TUI</a>
             </div>
             <div class="nav-section">
@@ -692,6 +716,17 @@
                         <p>Run <code>fwts</code> to see all your worktrees and manage them interactively.</p>
                     </div>
                 </div>
+                <div class="workflow-step">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <h3>Set up Claude Code</h3>
+                        <p>Copy this prompt and paste it into Claude:</p>
+                        <div class="copy-prompt" onclick="navigator.clipboard.writeText('Set my Claude statusline to: $(fwts statusline)')">
+                            <span>Set my Claude statusline to: $(fwts statusline)</span>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -767,78 +802,6 @@
                     </div>
                 </div>
             </div>
-        </section>
-
-        <!-- Claude Code Setup -->
-        <section id="claude-setup" class="section">
-            <h2 class="section-title">Claude Code Setup</h2>
-            <p class="section-subtitle">Give Claude context about your current worktree with a statusline.</p>
-
-            <h3 style="margin-bottom: 12px;">The Statusline</h3>
-            <p style="color: var(--text-muted); margin-bottom: 20px;">
-                The <code>fwts statusline</code> command outputs a compact summary of your git state that Claude can see in every prompt:
-            </p>
-
-            <div class="terminal" style="margin-top: 0; margin-bottom: 32px;">
-                <div class="terminal-header">
-                    <div class="terminal-dot red"></div>
-                    <div class="terminal-dot yellow"></div>
-                    <div class="terminal-dot green"></div>
-                </div>
-                <div class="terminal-body">
-                    <div class="terminal-line"><span class="terminal-comment"># Compact mode (default)</span></div>
-                    <div class="terminal-line"><span class="terminal-prompt">$</span> fwts statusline</div>
-                    <div class="terminal-line terminal-output">[featurebox] main +1~3?1 ↑2 +82/-937</div>
-                    <div class="terminal-line"></div>
-                    <div class="terminal-line"><span class="terminal-comment"># Human-readable mode</span></div>
-                    <div class="terminal-line"><span class="terminal-prompt">$</span> fwts statusline --obvious</div>
-                    <div class="terminal-line terminal-output">[featurebox] main (1 staged, 3 modified) (2 to push)</div>
-                    <div class="terminal-line"></div>
-                    <div class="terminal-line"><span class="terminal-comment"># Check a different directory</span></div>
-                    <div class="terminal-line"><span class="terminal-prompt">$</span> fwts statusline --dir ~/code/other-project</div>
-                </div>
-            </div>
-
-            <h3 style="margin-bottom: 12px;">Configure Claude Code</h3>
-            <p style="color: var(--text-muted); margin-bottom: 20px;">
-                Add the statusline to Claude's settings so it appears in every conversation:
-            </p>
-
-            <div class="install-option" style="margin-bottom: 24px;">
-                <h3>~/.claude/settings.json</h3>
-                <pre>{
-  "env": {
-    "CLAUDE_STATUSLINE": "$(fwts statusline)"
-  }
-}</pre>
-            </div>
-
-            <p style="color: var(--text-muted); margin-bottom: 20px;">
-                Or use <code>--obvious</code> for more verbose output:
-            </p>
-
-            <div class="install-option" style="margin-bottom: 24px;">
-                <h3>~/.claude/settings.json (verbose)</h3>
-                <pre>{
-  "env": {
-    "CLAUDE_STATUSLINE": "$(fwts statusline --obvious)"
-  }
-}</pre>
-            </div>
-
-            <h3 style="margin-bottom: 12px;">What Claude Sees</h3>
-            <p style="color: var(--text-muted); margin-bottom: 16px;">
-                With this configured, Claude knows at a glance:
-            </p>
-            <ul style="color: var(--text-muted); margin-left: 20px; line-height: 1.8;">
-                <li><strong>Project name</strong> — which fwts project you're in</li>
-                <li><strong>Branch</strong> — current branch name</li>
-                <li><strong>Staged changes</strong> — files ready to commit</li>
-                <li><strong>Modified files</strong> — uncommitted changes</li>
-                <li><strong>Untracked files</strong> — new files not yet added</li>
-                <li><strong>Push status</strong> — commits ahead/behind remote</li>
-                <li><strong>Diff stats</strong> — lines added/removed</li>
-            </ul>
         </section>
 
         <!-- TUI -->
