@@ -180,18 +180,26 @@ def start(
         console.print(f"[red]Could not resolve input to branch: {input}[/red]")
         raise typer.Exit(1)
 
-    # Check if worktree already exists
+    # Check if worktree already exists (by branch name or by path)
     main_repo = config.project.main_repo.expanduser().resolve()
+    worktree_base = config.project.worktree_base.expanduser().resolve()
+    safe_branch_name = branch.replace("/", "-")
+    worktree_path = worktree_base / safe_branch_name
+
     worktrees = list_worktrees(main_repo)
     existing = next((wt for wt in worktrees if wt.branch == branch), None)
+    existing_by_path = next((wt for wt in worktrees if wt.path == worktree_path), None)
+    existing = existing or existing_by_path
 
     if existing:
-        session_name = session_name_from_branch(branch)
+        # Use the actual branch name from the existing worktree
+        actual_branch = existing.branch
+        session_name = session_name_from_branch(actual_branch)
         if session_exists(session_name):
             console.print(f"[blue]Attaching to existing session: {session_name}[/blue]")
             attach_session(session_name)
         else:
-            full_setup(branch, config, base, ticket_info=ticket_info)
+            full_setup(actual_branch, config, base, ticket_info=ticket_info)
     else:
         full_setup(branch, config, base, ticket_info=ticket_info)
 

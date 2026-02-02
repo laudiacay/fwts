@@ -136,17 +136,22 @@ def full_setup(
     worktree_path = worktree_base / safe_branch_name
     session_name = session_name_from_branch(branch)
 
-    # Check if worktree already exists
+    # Check if worktree already exists (by branch name OR by path)
     existing_worktrees = list_worktrees(main_repo)
-    worktree_exists = any(wt.branch == branch for wt in existing_worktrees)
 
-    if worktree_exists:
-        console.print(f"[yellow]Worktree for {branch} already exists[/yellow]")
-        # Find the existing worktree path
-        for wt in existing_worktrees:
-            if wt.branch == branch:
-                worktree_path = wt.path
-                break
+    # First check by exact branch name
+    existing_by_branch = next((wt for wt in existing_worktrees if wt.branch == branch), None)
+
+    # Also check if a worktree already exists at the computed path
+    existing_by_path = next((wt for wt in existing_worktrees if wt.path == worktree_path), None)
+
+    # Use whichever we found (prefer branch match)
+    existing_worktree = existing_by_branch or existing_by_path
+
+    if existing_worktree:
+        console.print(f"[yellow]Worktree already exists: {existing_worktree.branch}[/yellow]")
+        worktree_path = existing_worktree.path
+        branch = existing_worktree.branch  # Use the actual branch name
     else:
         # Create worktree
         console.print(f"[blue]Creating worktree for {branch}...[/blue]")
@@ -240,16 +245,19 @@ def full_cleanup(
 
     worktree_path = worktree_obj.path
     session_name = session_name_from_branch(branch)
+    path_exists = worktree_path.exists()
 
     console.print(f"[blue]Cleaning up {branch}...[/blue]")
 
-    # Run on_cleanup lifecycle commands
-    if config.lifecycle.on_cleanup:
+    # Run on_cleanup lifecycle commands (only if path exists)
+    if config.lifecycle.on_cleanup and path_exists:
         console.print("[blue]Running cleanup commands...[/blue]")
         run_lifecycle_commands("on_cleanup", worktree_path, config)
+    elif config.lifecycle.on_cleanup:
+        console.print("[dim]Skipping cleanup commands (directory already removed)[/dim]")
 
-    # Stop docker if enabled
-    if config.docker.enabled and has_docker_compose():
+    # Stop docker if enabled (only if path exists)
+    if config.docker.enabled and has_docker_compose() and path_exists:
         console.print("[blue]Stopping Docker services...[/blue]")
         try:
             project_name = project_name_from_branch(branch)
@@ -263,16 +271,19 @@ def full_cleanup(
         console.print(f"[blue]Killing tmux session: {session_name}[/blue]")
         kill_session(session_name)
 
-    # Remove worktree
-    console.print(f"[blue]Removing worktree at {worktree_path}...[/blue]")
-    try:
-        remove_worktree(worktree_path, force=force, cwd=main_repo)
-        console.print("  [green]Worktree removed[/green]")
-    except Exception as e:
-        console.print(f"  [red]Failed to remove worktree: {e}[/red]")
-        if not force:
-            console.print("  [yellow]Try with --force to force removal[/yellow]")
-        return
+    # Remove worktree (or just prune if directory already gone)
+    if path_exists:
+        console.print(f"[blue]Removing worktree at {worktree_path}...[/blue]")
+        try:
+            remove_worktree(worktree_path, force=force, cwd=main_repo)
+            console.print("  [green]Worktree removed[/green]")
+        except Exception as e:
+            console.print(f"  [red]Failed to remove worktree: {e}[/red]")
+            if not force:
+                console.print("  [yellow]Try with --force to force removal[/yellow]")
+            # Continue anyway to clean up branch and prune
+    else:
+        console.print("[dim]Worktree directory already removed, pruning git reference...[/dim]")
 
     # Delete local branch
     console.print(f"[blue]Deleting local branch: {branch}...[/blue]")
