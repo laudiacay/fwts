@@ -64,14 +64,20 @@ jobs:
           cd homebrew-tap
           VERSION="${{ steps.version.outputs.version }}"
 
-          cat > Formula/fwts.rb << EOF
+          cat > Formula/fwts.rb << 'FORMULA'
           class Fwts < Formula
             include Language::Python::Virtualenv
 
             desc "Git worktree workflow manager for feature development"
             homepage "https://github.com/laudiacay/featurebox"
+          FORMULA
+
+          cat >> Formula/fwts.rb << EOF
             url "${{ steps.package.outputs.url }}"
             sha256 "${{ steps.package.outputs.sha256 }}"
+          EOF
+
+          cat >> Formula/fwts.rb << 'FORMULA'
             license "MIT"
 
             depends_on "python@3.11"
@@ -79,20 +85,21 @@ jobs:
             def install
               # Create venv with pip
               system Formula["python@3.11"].opt_bin/"python3.11", "-m", "venv", libexec
-              bin.install_symlink libexec/"bin/fwts"
-              bin.install_symlink libexec/"bin/fb"
             end
 
             def post_install
               # Install from PyPI after sandbox is lifted
-              system libexec/"bin/pip", "install", "--upgrade", "fwts==${VERSION}"
+              system libexec/"bin/pip", "install", "--upgrade", "fwts==#{version}"
+              # Create symlinks after pip install so targets exist
+              bin.install_symlink libexec/"bin/fwts"
+              bin.install_symlink libexec/"bin/fb"
             end
 
             test do
               system bin/"fwts", "--help"
             end
           end
-          EOF
+          FORMULA
 
       - name: Commit and push
         run: |
