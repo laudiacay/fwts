@@ -129,12 +129,18 @@ def get_builtin_hooks() -> list[ColumnHook]:
     return [
         ColumnHook(
             name="Local",
-            # Check for unpushed commits
-            # Output: "↑N" where N is number of commits, "synced", "no upstream"
+            # Check for unpushed commits or uncommitted changes
+            # Output: "↑N" (unpushed), "synced", "∗N" (uncommitted, no upstream), "clean"
             hook='''
                 upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
                 if [ -z "$upstream" ]; then
-                    echo "no upstream"
+                    # No upstream - show uncommitted changes count
+                    changed=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+                    if [ "$changed" -gt 0 ]; then
+                        echo "∗$changed"
+                    else
+                        echo "clean"
+                    fi
                     exit 0
                 fi
                 count=$(git rev-list --count "$upstream..HEAD" 2>/dev/null)
@@ -146,8 +152,9 @@ def get_builtin_hooks() -> list[ColumnHook]:
             ''',
             color_map={
                 "synced": "dim",
-                "no upstream": "yellow",
+                "clean": "dim",
                 "↑": "cyan",  # Partial match for ↑N
+                "∗": "yellow",  # Partial match for ∗N (uncommitted changes)
             },
         ),
         ColumnHook(
