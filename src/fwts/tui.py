@@ -796,27 +796,41 @@ class FwtsTUI:
         self._cleanup_func = func
 
     def _run_cleanup_in_thread(self, worktree: Any, force: bool, result: dict[str, Any]) -> None:
-        """Run cleanup in a background thread with suppressed output."""
+        """Run cleanup in a background thread, capturing output."""
         from io import StringIO
 
-        # Suppress output in the cleanup thread to avoid terminal conflicts
+        # Capture output instead of discarding - we'll show it if something goes wrong
         old_stdout = sys.stdout
         old_stderr = sys.stderr
-        devnull = StringIO()
+        captured_out = StringIO()
+        captured_err = StringIO()
+        worktree_path = worktree.path
 
         try:
-            sys.stdout = devnull
-            sys.stderr = devnull
+            sys.stdout = captured_out
+            sys.stderr = captured_err
             if self._cleanup_func:
                 self._cleanup_func(worktree, self.config, force=force)
-            result["success"] = True
-            result["error"] = None
         except Exception as e:
             result["success"] = False
-            result["error"] = e
+            result["error"] = str(e)
+            result["logs"] = captured_out.getvalue() + captured_err.getvalue()
+            result["done"] = True
+            return
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
+
+        # Capture all output
+        result["logs"] = captured_out.getvalue() + captured_err.getvalue()
+
+        # Verify the worktree was actually removed (full_cleanup swallows errors)
+        if worktree_path.exists():
+            result["success"] = False
+            result["error"] = "Worktree still exists after cleanup"
+        else:
+            result["success"] = True
+            result["error"] = None
         result["done"] = True
 
     def _run_inline_cleanup(self, live: Live) -> None:
@@ -830,13 +844,10 @@ class FwtsTUI:
             self.set_status("No worktrees selected", "yellow")
             return
 
-        from fwts.git import get_worktree_diff, has_uncommitted_changes
-
         spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
         for i, info in enumerate(worktrees):
             branch = info.worktree.branch
-            worktree_path = info.worktree.path
 
             # Show initial status
             self.set_status(
@@ -873,69 +884,75 @@ class FwtsTUI:
                 time.sleep(0.3)
                 continue
 
-            # Cleanup failed - check if due to uncommitted changes
-            e = result["error"]
-            if has_uncommitted_changes(worktree_path):
+            # Cleanup failed - show logs and offer force option
+            logs = result.get("logs", "").strip()
+            error_msg = result.get("error", "Unknown error")
+
+            # Build display message with logs
+            display_lines = [f"⚠ Cleanup failed for {branch}"]
+            if logs:
+                # Strip ANSI codes and limit lines for display
+                import re
+
+                clean_logs = re.sub(r"\x1b\[[0-9;]*m", "", logs)
+                log_lines = clean_logs.strip().split("\n")[-15:]  # Last 15 lines
+                display_lines.append("")
+                display_lines.extend(log_lines)
+            display_lines.append("")
+            display_lines.append(f"Error: {error_msg}")
+            display_lines.append("")
+            display_lines.append("Press 'f' to force cleanup, any other key to skip")
+
+            self.state.status_message = "\n".join(display_lines)
+            live.update(self._render(), refresh=True)
+
+            # Wait for user input
+            key = self._get_key_with_timeout(timeout=30.0)
+
+            if key == "f":
+                # User confirmed force cleanup - run in thread
                 self.set_status(
-                    f"⚠ {branch} has uncommitted changes - press 'f' to force, any other key to skip",
+                    f"Force cleaning [{i + 1}/{len(worktrees)}]: {branch}...",
                     style="yellow",
                 )
-
-                # Get diff for display
-                diff = get_worktree_diff(worktree_path, max_lines=20)
-
-                # Show diff in status area
-                prev_status = self.state.status_message
-                self.state.status_message = f"Uncommitted changes in {branch}:\n{diff}\n\nPress 'f' to force cleanup, any other key to skip"
                 live.update(self._render(), refresh=True)
 
-                # Wait for user input
-                key = self._get_key_with_timeout(timeout=30.0)
+                # Run force cleanup in background thread
+                force_result: dict[str, Any] = {
+                    "done": False,
+                    "success": False,
+                    "error": None,
+                    "logs": "",
+                }
+                force_thread = threading.Thread(
+                    target=self._run_cleanup_in_thread,
+                    args=(info.worktree, True, force_result),
+                    daemon=True,
+                )
+                force_thread.start()
 
-                # Restore previous status
-                self.state.status_message = prev_status
-
-                if key == "f":
-                    # User confirmed force cleanup - run in thread
+                # Poll for completion
+                spinner_idx = 0
+                while not force_result["done"]:
+                    spinner = spinner_chars[spinner_idx % len(spinner_chars)]
                     self.set_status(
-                        f"Force cleaning [{i + 1}/{len(worktrees)}]: {branch}...",
+                        f"{spinner} Force cleaning [{i + 1}/{len(worktrees)}]: {branch}...",
                         style="yellow",
                     )
                     live.update(self._render(), refresh=True)
+                    spinner_idx += 1
+                    time.sleep(0.1)
 
-                    # Run force cleanup in background thread
-                    force_result: dict[str, Any] = {"done": False, "success": False, "error": None}
-                    force_thread = threading.Thread(
-                        target=self._run_cleanup_in_thread,
-                        args=(info.worktree, True, force_result),
-                        daemon=True,
-                    )
-                    force_thread.start()
-
-                    # Poll for completion
-                    spinner_idx = 0
-                    while not force_result["done"]:
-                        spinner = spinner_chars[spinner_idx % len(spinner_chars)]
-                        self.set_status(
-                            f"{spinner} Force cleaning [{i + 1}/{len(worktrees)}]: {branch}...",
-                            style="yellow",
-                        )
-                        live.update(self._render(), refresh=True)
-                        spinner_idx += 1
-                        time.sleep(0.1)
-
-                    if force_result["success"]:
-                        self.set_status(f"✓ Force cleaned: {branch}", style="green")
-                    else:
-                        self.set_status(
-                            f"✗ Failed: {branch} - {force_result['error']}", style="red"
-                        )
+                if force_result["success"]:
+                    self.set_status(f"✓ Force cleaned: {branch}", style="green")
                 else:
-                    # User skipped
-                    self.set_status(f"⊘ Skipped: {branch}", style="dim")
+                    force_logs = force_result.get("logs", "").strip()
+                    self.set_status(
+                        f"✗ Failed: {branch} - {force_result['error']}\n{force_logs}", style="red"
+                    )
             else:
-                # Other error, not uncommitted changes
-                self.set_status(f"✗ Failed: {branch} - {e}", style="red")
+                # User skipped
+                self.set_status(f"⊘ Skipped: {branch}", style="dim")
 
             live.update(self._render(), refresh=True)
             time.sleep(0.3)
