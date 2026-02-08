@@ -283,6 +283,38 @@ async def get_branch_from_ticket(
     return ticket.branch_name
 
 
+async def resolve_ticket_to_branch(
+    identifier: str, api_key: str | None = None, check_linked_prs: bool = True
+) -> tuple[str, TicketInfo]:
+    """Get branch name and ticket info for a Linear ticket.
+
+    Like get_branch_from_ticket but also returns the ticket info
+    so callers can use the title for display purposes.
+
+    Args:
+        identifier: Ticket identifier or URL
+        api_key: Linear API key
+        check_linked_prs: If True, also check for linked PRs
+
+    Returns:
+        Tuple of (branch_name_or_pr_url, ticket_info)
+    """
+    ticket = await get_ticket(identifier, api_key)
+
+    if check_linked_prs:
+        linked_prs = await get_linked_prs(identifier, api_key)
+        for pr in linked_prs:
+            if pr.branch:
+                return pr.branch, ticket
+            if pr.url:
+                return f"pr:{pr.url}", ticket
+
+    if not ticket.branch_name:
+        safe_title = re.sub(r"[^a-zA-Z0-9]+", "-", ticket.title.lower()).strip("-")[:50]
+        return f"{ticket.identifier.lower()}-{safe_title}", ticket
+    return ticket.branch_name, ticket
+
+
 def extract_ticket_from_branch(branch: str) -> str | None:
     """Extract Linear ticket identifier from branch name.
 

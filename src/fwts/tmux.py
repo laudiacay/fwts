@@ -38,6 +38,7 @@ def create_session(
     config: TmuxConfig,
     claude_config: ClaudeConfig | None = None,
     ticket_info: str = "",
+    display_name: str = "",
 ) -> None:
     """Create a new tmux session with editor and side command.
 
@@ -47,6 +48,8 @@ def create_session(
         config: Tmux configuration
         claude_config: Optional Claude configuration for initial context
         ticket_info: Optional ticket info to pass to Claude
+        display_name: Human-readable name for the tmux window title (shown in iTerm tabs).
+                      Falls back to session name if empty.
     """
     path = path.expanduser().resolve()
 
@@ -137,14 +140,25 @@ def create_session(
         check=True,
     )
 
-    # Name the window after the branch and disable automatic-rename so it stays
+    # Name the window and disable automatic-rename so it stays
+    window_title = display_name or name
     subprocess.run(
-        ["tmux", "rename-window", "-t", f"{name}:{first_window}", name],
+        ["tmux", "rename-window", "-t", f"{name}:{first_window}", window_title],
         check=True,
     )
     subprocess.run(
         ["tmux", "set-option", "-t", name, "automatic-rename", "off"],
         check=True,
+    )
+
+    # Enable terminal title updates so iTerm/terminal tabs show the window name
+    subprocess.run(
+        ["tmux", "set-option", "-g", "set-titles", "on"],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["tmux", "set-option", "-g", "set-titles-string", "#W"],
+        capture_output=True,
     )
 
 

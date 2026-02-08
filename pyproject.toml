@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fwts"
-version = "0.1.35"
+version = "0.1.36"
 description = "Git worktree workflow manager for feature development"
 readme = "README.md"
 license = "MIT"

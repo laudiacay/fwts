@@ -112,6 +112,7 @@ def full_setup(
     config: Config,
     base_branch: str | None = None,
     ticket_info: str = "",
+    display_name: str = "",
 ) -> Path:
     """Complete setup for a new or existing feature branch.
 
@@ -122,6 +123,8 @@ def full_setup(
         config: Configuration
         base_branch: Optional base branch (defaults to config.project.base_branch)
         ticket_info: Optional ticket info to pass to Claude initialization
+        display_name: Human-readable name for tmux window title (e.g. ticket title).
+                      Falls back to branch-derived session name if empty.
 
     Returns:
         Path to the worktree
@@ -190,6 +193,7 @@ def full_setup(
             config.tmux,
             claude_config=config.claude,
             ticket_info=ticket_info,
+            display_name=display_name,
         )
 
         # Run on_start lifecycle commands

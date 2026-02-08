@@ -26,7 +26,7 @@ from fwts.focus import (
 from fwts.git import list_worktrees
 from fwts.github import get_branch_from_pr, has_gh_cli
 from fwts.lifecycle import full_cleanup, full_setup, get_worktree_for_input
-from fwts.linear import get_branch_from_ticket
+from fwts.linear import resolve_ticket_to_branch
 from fwts.paths import ensure_config_dir, get_global_config_path
 from fwts.setup import interactive_setup
 from fwts.tmux import attach_session, session_exists, session_name_from_branch
@@ -101,22 +101,26 @@ def main(
     _global_config_path = config
 
 
-def _resolve_input_to_branch(input_str: str, config: Config) -> str | None:
+def _resolve_input_to_branch(input_str: str, config: Config) -> tuple[str | None, str]:
     """Resolve various input formats to a branch name.
 
     Accepts:
     - Branch name
     - Linear ticket (SUP-123 or URL) - also checks for linked PRs
     - GitHub PR (#123 or URL)
+
+    Returns:
+        Tuple of (branch_name, display_name). display_name is empty if not available.
     """
     if not input_str:
-        return None
+        return None, ""
 
     # Check if it looks like a Linear ticket
     is_linear = input_str.upper().startswith(("SUP-", "ENG-", "DEV-")) or "linear.app" in input_str
     if is_linear and config.linear.enabled:
         try:
-            result = asyncio.run(get_branch_from_ticket(input_str, config.linear.api_key))
+            result, ticket = asyncio.run(resolve_ticket_to_branch(input_str, config.linear.api_key))
+            display_name = f"{ticket.identifier} {ticket.title}"
             # Check if result is a PR URL (for reviewing others' code)
             if result and result.startswith("pr:"):
                 pr_url = result[3:]  # Remove "pr:" prefix
@@ -124,24 +128,24 @@ def _resolve_input_to_branch(input_str: str, config: Config) -> str | None:
                 if has_gh_cli() and config.project.github_repo:
                     branch = get_branch_from_pr(pr_url, config.project.github_repo)
                     if branch:
-                        return branch
+                        return branch, display_name
                 # If we couldn't get branch from gh, return None to let user know
                 console.print("[yellow]Could not get branch from linked PR[/yellow]")
-                return None
-            return result
+                return None, ""
+            return result, display_name
         except Exception as e:
             console.print(f"[yellow]Could not resolve Linear ticket: {e}[/yellow]")
-            return None
+            return None, ""
 
     # Check if it looks like a GitHub PR
     is_github_pr = input_str.startswith("#") or input_str.isdigit() or "github.com" in input_str
     if is_github_pr and has_gh_cli() and config.project.github_repo:
         branch = get_branch_from_pr(input_str, config.project.github_repo)
         if branch:
-            return branch
+            return branch, ""
 
     # Assume it's a branch name
-    return input_str
+    return input_str, ""
 
 
 @app.command()
@@ -183,7 +187,7 @@ def start(
 
     # Resolve input to branch name and get ticket info if applicable
     ticket_info = ""
-    branch = _resolve_input_to_branch(input, config)
+    branch, display_name = _resolve_input_to_branch(input, config)
 
     # If input looks like a Linear ticket, save it as ticket info
     if input and (input.upper().startswith("SUP-") or "linear.app" in input.lower()):
@@ -212,9 +216,15 @@ def start(
             console.print(f"[blue]Attaching to existing session: {session_name}[/blue]")
             attach_session(session_name)
         else:
-            full_setup(actual_branch, config, base, ticket_info=ticket_info)
+            full_setup(
+                actual_branch,
+                config,
+                base,
+                ticket_info=ticket_info,
+                display_name=display_name,
+            )
     else:
-        full_setup(branch, config, base, ticket_info=ticket_info)
+        full_setup(branch, config, base, ticket_info=ticket_info, display_name=display_name)
 
 
 @app.command()
@@ -658,7 +668,8 @@ def _start_ticket_worktree(ticket: TicketInfo, config: Config) -> None:
         safe_title = re.sub(r"[^a-zA-Z0-9]+", "-", ticket.title.lower()).strip("-")[:50]
         branch = f"{ticket.identifier.lower()}-{safe_title}"
 
-    full_setup(branch, config, ticket_info=ticket.identifier)
+    display_name = f"{ticket.identifier} {ticket.title}"
+    full_setup(branch, config, ticket_info=ticket.identifier, display_name=display_name)
 
 
 @app.command()
