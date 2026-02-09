@@ -144,19 +144,25 @@ def create_worktree(
     """Create a new worktree.
 
     If branch doesn't exist, creates it from base_branch (or current HEAD).
+    Fetches from origin before checking remote branches to avoid creating
+    duplicates when the local remote refs are stale.
     """
     path = path.expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if branch_exists(branch, cwd):
-        # Branch exists, just add worktree
-        run_git(["worktree", "add", str(path), branch], cwd=cwd)
-    elif remote_branch_exists(branch, cwd=cwd):
-        # Branch exists on remote, track it
+        # Branch exists locally, just add worktree
         run_git(["worktree", "add", str(path), branch], cwd=cwd)
     else:
-        # Create new branch
-        if base_branch:
+        # Fetch so remote refs are up to date before deciding to create vs track
+        run_git(["fetch", "origin"], cwd=cwd, check=False)
+        if remote_branch_exists(branch, cwd=cwd):
+            # Branch exists on remote, create local tracking branch
+            run_git(
+                ["worktree", "add", "--track", "-b", branch, str(path), f"origin/{branch}"],
+                cwd=cwd,
+            )
+        elif base_branch:
             run_git(["worktree", "add", "-b", branch, str(path), base_branch], cwd=cwd)
         else:
             run_git(["worktree", "add", "-b", branch, str(path)], cwd=cwd)
