@@ -253,6 +253,7 @@ def cleanup(
     if not input:
         # Interactive mode
         tui = FwtsTUI(config)
+        tui.set_cleanup_func(full_cleanup)
         action, selected = tui.run()
 
         if action == "cleanup" and selected and isinstance(selected, list):
