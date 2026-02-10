@@ -1,3 +1,3 @@
 """fwts - Git worktree workflow manager for feature development."""
 
-__version__ = "0.1.41"
+__version__ = "0.1.42"

@@ -31,6 +31,19 @@ from fwts.tmux import session_exists, session_name_from_branch
 console = Console()
 
 
+def _tui_log(msg: str) -> None:
+    """Append a timestamped message to ~/.fwts/tui.log for debugging."""
+    try:
+        from pathlib import Path
+
+        log_dir = Path.home() / ".fwts"
+        log_dir.mkdir(exist_ok=True)
+        with open(log_dir / "tui.log", "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
+
 def save_terminal_state() -> list[Any] | None:
     """Save current terminal state. Returns None if not a tty."""
     try:
@@ -364,6 +377,33 @@ class FwtsTUI:
             self.state.last_refresh = time.time()
             if not self.state.status_message or self.state.status_message == "Refreshing...":
                 self.state.status_message = None
+
+    def _start_background_refresh(self) -> None:
+        """Start data loading in a background thread (non-blocking)."""
+        if self.state.loading:
+            return
+        self.state.needs_refresh = False
+
+        def _bg() -> None:
+            try:
+                asyncio.run(self._load_data())
+            except Exception as e:
+                _tui_log(f"Background refresh failed: {e}")
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    @staticmethod
+    def _flush_stdin() -> None:
+        """Drain any buffered stdin so the next read gets a fresh keystroke."""
+        import os
+        import select as select_mod
+
+        fd = sys.stdin.fileno()
+        while True:
+            r, _, _ = select_mod.select([fd], [], [], 0)
+            if not r:
+                break
+            os.read(fd, 1024)
 
     def _background_load_tickets(self) -> None:
         """Load tickets in background thread for faster mode switching."""
@@ -961,33 +1001,42 @@ class FwtsTUI:
         self._cleanup_func = func
 
     def _run_cleanup_in_thread(self, worktree: Any, force: bool, result: dict[str, Any]) -> None:
-        """Run cleanup in a background thread, capturing output."""
+        """Run cleanup in a background thread, capturing output.
+
+        IMPORTANT: We capture output by replacing the lifecycle module's console
+        object, NOT by redirecting sys.stdout. Redirecting sys.stdout is process-
+        global and breaks Rich Live rendering on the main thread.
+        """
         from io import StringIO
 
-        # Capture output instead of discarding - we'll show it if something goes wrong
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        captured_out = StringIO()
-        captured_err = StringIO()
+        from rich.console import Console as RichConsole
+
+        import fwts.lifecycle as lc_mod
+
         worktree_path = worktree.path
 
+        # Replace lifecycle's console with one that writes to a StringIO.
+        # This captures cleanup output without touching sys.stdout.
+        captured_io = StringIO()
+        saved_console = lc_mod.console
+        lc_mod.console = RichConsole(file=captured_io, no_color=True)
+
         try:
-            sys.stdout = captured_out
-            sys.stderr = captured_err
+            _tui_log(f"Cleanup starting: {worktree.branch} (force={force})")
             if self._cleanup_func:
                 self._cleanup_func(worktree, self.config, force=force)
         except Exception as e:
+            _tui_log(f"Cleanup exception: {worktree.branch}: {e}")
             result["success"] = False
             result["error"] = str(e)
-            result["logs"] = captured_out.getvalue() + captured_err.getvalue()
+            result["logs"] = captured_io.getvalue()
             result["done"] = True
             return
         finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
+            lc_mod.console = saved_console
 
-        # Capture all output
-        result["logs"] = captured_out.getvalue() + captured_err.getvalue()
+        result["logs"] = captured_io.getvalue()
+        _tui_log(f"Cleanup finished: {worktree.branch}, path_exists={worktree_path.exists()}")
 
         # Verify the worktree was actually removed (full_cleanup swallows errors)
         if worktree_path.exists():
@@ -1080,6 +1129,10 @@ class FwtsTUI:
             self.state.status_message = "\n".join(display_lines)
             live.update(self._render(), refresh=True)
 
+            # Flush any keystrokes buffered during the cleanup (user may have
+            # typed while the spinner was running) so we read a deliberate answer.
+            self._flush_stdin()
+
             # Wait for user input
             key = self._get_key_with_timeout(timeout=30.0)
 
@@ -1131,20 +1184,12 @@ class FwtsTUI:
             live.update(self._render(), refresh=True)
             time.sleep(0.3)
 
-        # Clear selection and refresh data
+        # Clear selection and schedule non-blocking refresh
         self.state.selected.clear()
-        self.set_status("Cleanup complete - refreshing...", style="green")
-        live.update(self._render(), refresh=True)
-
-        # Refresh to show updated worktree list
-        asyncio.run(self._load_data())
-
-        # Reset cursor/viewport to safe positions after list may have shrunk
-        max_cursor = max(0, len(self.state.worktrees) - 1)
-        self.state.cursor = min(self.state.cursor, max_cursor)
+        self.state.cursor = 0
         self.state.viewport_start = 0
-
-        self.clear_status()
+        self.state.needs_refresh = True
+        self.set_status("Cleanup complete - refreshing...", style="green")
         live.update(self._render(), refresh=True)
 
     def _run_inline_focus(self, live: Live) -> None:
@@ -1199,9 +1244,8 @@ class FwtsTUI:
 
         live.update(self._render(), refresh=True)
 
-        # Refresh data to show focus indicator
-        asyncio.run(self._load_data())
-        live.update(self._render(), refresh=True)
+        # Schedule non-blocking refresh to show focus indicator
+        self.state.needs_refresh = True
 
     def _show_unpushed_commits(self) -> None:
         """Show unpushed commits for the selected worktree."""
@@ -1336,7 +1380,11 @@ class FwtsTUI:
 
         try:
             with Live(self._render(), auto_refresh=False, console=console) as live:
+                _tui_log("TUI main loop starting")
                 while self.state.running:
+                    # Always update display (shows loading spinners, status, etc.)
+                    live.update(self._render(), refresh=True)
+
                     # Get current items list based on mode
                     items = (
                         self.state.worktrees
@@ -1350,22 +1398,20 @@ class FwtsTUI:
                         self.state.resize_detected = False
                         self.state.last_terminal_size = current_size
                         self._adjust_viewport_after_resize(items)
-                        live.update(self._render(), refresh=True)
 
-                    # Check for auto-refresh before blocking
-                    if time.time() - self.state.last_refresh >= AUTO_REFRESH_INTERVAL:
-                        live.update(self._render(), refresh=True)
-                        asyncio.run(self._load_data())
-                        live.update(self._render(), refresh=True)
+                    # Start background refresh if needed (non-blocking)
+                    needs_auto = time.time() - self.state.last_refresh >= AUTO_REFRESH_INTERVAL
+                    if (self.state.needs_refresh or needs_auto) and not self.state.loading:
+                        self._start_background_refresh()
 
-                    # Handle input - non-blocking read with timeout for resize/refresh checks
+                    # Handle input - non-blocking read with timeout for resize/refresh
                     try:
                         key = self._get_key_with_timeout(timeout=0.5)
 
                         if key is None:
-                            # Timeout - loop back to check resize/refresh
                             continue
 
+                        _tui_log(f"Key pressed: {repr(key)}")
                         action = self._handle_key(key)
 
                         if action:
@@ -1380,24 +1426,13 @@ class FwtsTUI:
                         if self._pending_cleanup:
                             self._pending_cleanup = False
                             self._run_inline_cleanup(live)
-                            live.update(self._render(), refresh=True)
                             continue
 
                         # Handle inline focus
                         if self._pending_focus:
                             self._pending_focus = False
                             self._run_inline_focus(live)
-                            live.update(self._render(), refresh=True)
                             continue
-
-                        # Refresh data if needed
-                        if self.state.needs_refresh:
-                            live.update(self._render(), refresh=True)
-                            asyncio.run(self._load_data())
-                            live.update(self._render(), refresh=True)
-                        else:
-                            # Always update display after processing a key
-                            live.update(self._render(), refresh=True)
 
                     except KeyboardInterrupt:
                         self.state.running = False

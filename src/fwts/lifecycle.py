@@ -82,13 +82,13 @@ def run_lifecycle_commands(
         commands = config.lifecycle.on_start
         for cmd in commands:
             console.print(f"  [dim]Running: {cmd}[/dim]")
-            subprocess.run(cmd, shell=True, cwd=path, capture_output=True)
+            subprocess.run(cmd, shell=True, cwd=path, capture_output=True, stdin=subprocess.DEVNULL)
 
     elif phase == "on_cleanup":
         commands = config.lifecycle.on_cleanup
         for cmd in commands:
             console.print(f"  [dim]Running: {cmd}[/dim]")
-            subprocess.run(cmd, shell=True, cwd=path, capture_output=True)
+            subprocess.run(cmd, shell=True, cwd=path, capture_output=True, stdin=subprocess.DEVNULL)
 
     elif phase == "post_create":
         for lifecycle_cmd in config.lifecycle.post_create:
@@ -99,12 +99,22 @@ def run_lifecycle_commands(
                     if full_path.exists():
                         console.print(f"  [dim]Running in {dir_path}: {lifecycle_cmd.cmd}[/dim]")
                         subprocess.run(
-                            lifecycle_cmd.cmd, shell=True, cwd=full_path, capture_output=True
+                            lifecycle_cmd.cmd,
+                            shell=True,
+                            cwd=full_path,
+                            capture_output=True,
+                            stdin=subprocess.DEVNULL,
                         )
             else:
                 # Run in worktree root
                 console.print(f"  [dim]Running: {lifecycle_cmd.cmd}[/dim]")
-                subprocess.run(lifecycle_cmd.cmd, shell=True, cwd=path, capture_output=True)
+                subprocess.run(
+                    lifecycle_cmd.cmd,
+                    shell=True,
+                    cwd=path,
+                    capture_output=True,
+                    stdin=subprocess.DEVNULL,
+                )
 
 
 def full_setup(

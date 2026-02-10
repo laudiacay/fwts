@@ -17,7 +17,12 @@ class DockerError(Exception):
 def has_docker() -> bool:
     """Check if docker is installed and running."""
     try:
-        subprocess.run(["docker", "info"], capture_output=True, check=True)
+        subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
@@ -27,14 +32,24 @@ def has_docker_compose() -> bool:
     """Check if docker compose is available."""
     # Try new docker compose (plugin)
     try:
-        subprocess.run(["docker", "compose", "version"], capture_output=True, check=True)
+        subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
     # Try old docker-compose
     try:
-        subprocess.run(["docker-compose", "version"], capture_output=True, check=True)
+        subprocess.run(
+            ["docker-compose", "version"],
+            capture_output=True,
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
@@ -43,7 +58,12 @@ def has_docker_compose() -> bool:
 def _compose_command() -> list[str]:
     """Get the docker compose command prefix."""
     try:
-        subprocess.run(["docker", "compose", "version"], capture_output=True, check=True)
+        subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
         return ["docker", "compose"]
     except (subprocess.CalledProcessError, FileNotFoundError):
         return ["docker-compose"]
@@ -77,7 +97,7 @@ def compose_up(
     if detach:
         cmd.append("-d")
 
-    result = subprocess.run(cmd, cwd=path, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=path, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         raise DockerError(f"Docker compose up failed:\n{result.stderr}")
 
@@ -110,7 +130,7 @@ def compose_down(
     if volumes:
         cmd.append("-v")
 
-    subprocess.run(cmd, cwd=path, capture_output=True)
+    subprocess.run(cmd, cwd=path, capture_output=True, stdin=subprocess.DEVNULL)
 
 
 def compose_ps(
@@ -134,7 +154,7 @@ def compose_ps(
 
     cmd.extend(["ps", "--format", "json"])
 
-    result = subprocess.run(cmd, cwd=path, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=path, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         return []
 

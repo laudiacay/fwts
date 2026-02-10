@@ -144,6 +144,7 @@ def run_focus_commands(
                 capture_output=True,
                 text=True,
                 env={**os.environ, **env},
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode != 0:
                 console.print(f"  [red]Command failed: {result.stderr}[/red]")
