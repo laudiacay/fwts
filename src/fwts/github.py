@@ -51,7 +51,12 @@ class PRInfo:
 def has_gh_cli() -> bool:
     """Check if GitHub CLI is installed and authenticated."""
     try:
-        subprocess.run(["gh", "auth", "status"], capture_output=True, check=True)
+        subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
@@ -65,6 +70,7 @@ def _run_gh(args: list[str], check: bool = True) -> subprocess.CompletedProcess[
             capture_output=True,
             text=True,
             check=check,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError as e:
         raise GitHubError(f"gh command failed: gh {' '.join(args)}\n{e.stderr}") from e

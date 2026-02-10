@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +66,7 @@ async def run_hook(
             ["bash", "-c", hook_cmd],
             env=env,
             cwd=worktree.path,
+            stdin=subprocess.DEVNULL,
         )
         output = process.stdout.decode().strip()
     except asyncio.TimeoutError:

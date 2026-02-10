@@ -35,6 +35,7 @@ def run_git(
             capture_output=True,
             text=True,
             check=check,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError as e:
         raise GitError(f"Git command failed: git {' '.join(args)}\n{e.stderr}") from e
@@ -211,6 +212,7 @@ def has_graphite() -> bool:
             ["gt", "--version"],
             capture_output=True,
             check=True,
+            stdin=subprocess.DEVNULL,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -224,6 +226,7 @@ def graphite_init(trunk: str, cwd: Path | None = None) -> None:
         cwd=cwd,
         capture_output=True,
         check=True,
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -232,7 +235,7 @@ def graphite_track(parent: str | None = None, cwd: Path | None = None) -> None:
     args = ["gt", "branch", "track"]
     if parent:
         args.extend(["--parent", parent])
-    subprocess.run(args, cwd=cwd, capture_output=True, check=True)
+    subprocess.run(args, cwd=cwd, capture_output=True, check=True, stdin=subprocess.DEVNULL)
 
 
 def get_branch_from_worktree_path(path: Path) -> str | None:

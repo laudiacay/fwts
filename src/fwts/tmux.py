@@ -28,6 +28,7 @@ def session_exists(name: str) -> bool:
     result = subprocess.run(
         ["tmux", "has-session", "-t", name],
         capture_output=True,
+        stdin=subprocess.DEVNULL,
     )
     return result.returncode == 0
 
@@ -190,6 +191,7 @@ def kill_session(name: str) -> None:
         subprocess.run(
             ["tmux", "kill-session", "-t", name],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
         )
 
 
@@ -199,6 +201,7 @@ def list_sessions() -> list[str]:
         ["tmux", "list-sessions", "-F", "#{session_name}"],
         capture_output=True,
         text=True,
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         return []
