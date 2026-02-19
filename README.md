@@ -10,7 +10,6 @@ Git worktree workflow manager for feature development. Automates creating worktr
 ## Features
 
 - **Worktree Management** - Create and manage git worktrees for parallel feature development
-- **Focus Switching** - Claim shared resources (DB ports, etc.) for one worktree at a time
 - **Multi-Project Support** - Manage multiple repos with named projects in global config
 - **Tmux Integration** - Automatic session creation with editor and side command (e.g., Claude)
 - **Docker Compose** - Start/stop isolated docker services per feature
@@ -121,20 +120,7 @@ fwts status
 fwts list
 ```
 
-### 4. Focus on a worktree (claim shared resources):
-
-```bash
-# Focus on a branch
-fwts focus feature/my-feature
-
-# Show current focus
-fwts focus
-
-# Clear focus
-fwts focus --clear
-```
-
-### 5. Clean up when done:
+### 4. Clean up when done:
 
 ```bash
 # Cleanup specific worktree
@@ -160,9 +146,6 @@ main_repo = "~/code/myproject"
 worktree_base = "~/code/myproject-worktrees"
 base_branch = "main"
 github_repo = "username/myproject"
-
-[projects.myproject.focus]
-on_focus = ["just docker expose-db"]
 
 [projects.another]
 name = "another"
@@ -200,16 +183,6 @@ layout = "vertical"
 on_start = ["just up"]
 on_cleanup = ["just down"]
 
-[focus]
-# Commands to run when this worktree gains focus
-on_focus = ["just docker expose-db"]
-# Commands to run when this worktree loses focus
-on_unfocus = []
-
-# Per-branch pattern overrides
-[focus.overrides."feature-*"]
-on_focus = ["just docker expose-db", "just connect dev-tunnel"]
-
 [symlinks]
 paths = [".env.local"]
 
@@ -243,7 +216,6 @@ Configuration is loaded and merged in this order (later overrides earlier):
 | `fwts cleanup [input]` | Clean up worktree, tmux, docker |
 | `fwts status` | Interactive TUI dashboard |
 | `fwts list` | Simple worktree list |
-| `fwts focus [branch]` | Switch focus to a worktree |
 | `fwts projects` | List configured projects |
 | `fwts init` | Initialize config file |
 | `fwts init --global` | Initialize global config |
@@ -262,7 +234,6 @@ All commands support:
 ```bash
 fb start SUP-123
 fb status
-fb focus my-feature
 ```
 
 ## TUI Keyboard Shortcuts
@@ -274,27 +245,9 @@ fb focus my-feature
 | `space` | Toggle selection |
 | `a` | Select all |
 | `enter` | Launch selected |
-| `f` | Focus selected |
 | `d` | Cleanup selected |
 | `r` | Refresh |
 | `q` | Quit |
-
-## Focus Switching
-
-Focus allows one worktree to "claim" shared resources like database ports. This is useful when:
-- Multiple worktrees share localhost ports (e.g., postgres:5432)
-- You need to switch your database GUI between worktrees
-- External tools need to connect to the "current" worktree's services
-
-Configure focus commands in your config:
-
-```toml
-[focus]
-on_focus = ["just docker expose-db"]  # Run when gaining focus
-on_unfocus = ["echo 'Releasing resources'"]  # Run when losing focus
-```
-
-Only one worktree per project can have focus at a time. The TUI shows focus status with a ◉ indicator.
 
 ## Advanced Features
 

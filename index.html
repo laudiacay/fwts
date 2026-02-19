@@ -662,10 +662,6 @@
                     <div class="terminal-line terminal-output">✓ Resolved SUP-123 → sup-123-add-user-auth</div>
                     <div class="terminal-line terminal-output">✓ Created worktree + tmux + Docker</div>
                     <div class="terminal-line terminal-output">✓ Attached to session</div>
-                    <div class="terminal-line"></div>
-                    <div class="terminal-line"><span class="terminal-comment"># Switch focus to another feature</span></div>
-                    <div class="terminal-line"><span class="terminal-prompt">$</span> fwts focus hotfix-billing</div>
-                    <div class="terminal-line terminal-output">✓ Database now connected to hotfix-billing</div>
                 </div>
             </div>
         </section>
@@ -741,11 +737,6 @@
                     <p>Create and manage git worktrees with a single command. Resolve Linear tickets or PR numbers to branch names automatically.</p>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🎯</div>
-                    <h3>Focus System</h3>
-                    <p>Only one worktree "owns" shared resources at a time. Switch focus to instantly reconnect your database, ports, and services.</p>
-                </div>
-                <div class="feature-card">
                     <div class="feature-icon">🖥️</div>
                     <h3>Tmux Integration</h3>
                     <p>Automatically creates tmux sessions with your editor and side pane (Claude Code, tests, logs). Per-feature workspaces.</p>
@@ -758,7 +749,7 @@
                 <div class="feature-card">
                     <div class="feature-icon">⚡</div>
                     <h3>Lifecycle Hooks</h3>
-                    <p>Run custom commands on setup, focus, unfocus, and cleanup. Auto-install deps, run migrations, sync .env files.</p>
+                    <p>Run custom commands on setup and cleanup. Auto-install deps, run migrations, sync .env files.</p>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">🔧</div>
@@ -815,7 +806,7 @@
                 </div>
                 <div class="feature-card">
                     <h3>Keyboard-Driven</h3>
-                    <p>Navigate with j/k, select with space, launch with enter, cleanup with d, focus with f.</p>
+                    <p>Navigate with j/k, select with space, launch with enter, cleanup with d.</p>
                 </div>
                 <div class="feature-card">
                     <h3>Multi-Select</h3>
@@ -856,12 +847,6 @@
                     </tr>
                     <tr>
                         <td>Docker per-feature</td>
-                        <td class="highlight-col"><span class="check">✓</span></td>
-                        <td><span class="cross">✗</span></td>
-                        <td><span class="cross">✗</span></td>
-                    </tr>
-                    <tr>
-                        <td>Focus/resource system</td>
                         <td class="highlight-col"><span class="check">✓</span></td>
                         <td><span class="cross">✗</span></td>
                         <td><span class="cross">✗</span></td>
@@ -915,13 +900,6 @@
                 </div>
                 <div class="workflow-step">
                     <div class="step-number">3</div>
-                    <div class="step-content">
-                        <h3>Switch context</h3>
-                        <p><code>fwts focus hotfix-branch</code> — Shared resources switch over automatically.</p>
-                    </div>
-                </div>
-                <div class="workflow-step">
-                    <div class="step-number">4</div>
                     <div class="step-content">
                         <h3>Clean up</h3>
                         <p><code>fwts cleanup</code> — Worktree deleted, tmux killed, Docker stopped, branch removed. One command.</p>

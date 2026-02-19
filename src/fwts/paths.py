@@ -33,7 +33,7 @@ def get_config_dir() -> Path:
 
 
 def get_state_dir() -> Path:
-    """Get the fwts state directory (for focus tracking, etc).
+    """Get the fwts state directory.
 
     Priority:
     1. FWTS_STATE_DIR env var (full override)

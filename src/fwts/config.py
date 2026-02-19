@@ -57,6 +57,10 @@ class DockerConfig:
 
     enabled: bool = False
     compose_file: str = "docker-compose.yml"
+    project_name: str = "directory"  # "directory" or "branch"
+    project_name_max_length: int = 0  # 0 means no truncation
+    up_command: str = ""  # Custom docker up command (run in worktree dir)
+    down_command: str = ""  # Custom docker down command (run in worktree dir)
 
 
 @dataclass
@@ -74,16 +78,6 @@ class LifecycleConfig:
     on_start: list[str] = field(default_factory=list)
     on_cleanup: list[str] = field(default_factory=list)
     post_create: list[LifecycleCommand] = field(default_factory=list)
-
-
-@dataclass
-class FocusConfig:
-    """Focus switching configuration."""
-
-    on_focus: list[str] = field(default_factory=list)  # Commands to run when focusing
-    on_unfocus: list[str] = field(default_factory=list)  # Commands to run when unfocusing
-    # Pattern-based overrides: branch pattern -> FocusConfig
-    overrides: dict[str, FocusConfig] = field(default_factory=dict)
 
 
 @dataclass
@@ -114,10 +108,9 @@ class ClaudeConfig:
 
     enabled: bool = True
     # Commands to run to gather context (output is piped to claude)
-    # Opinionated defaults: CLAUDE.md + recent commits
+    # Opinionated defaults: recent commits + git status (Claude Code already loads CLAUDE.md)
     context_commands: list[str] = field(
         default_factory=lambda: [
-            "cat CLAUDE.md 2>/dev/null || cat .claude/CLAUDE.md 2>/dev/null || true",
             "echo '## Recent commits on this branch:' && git log --oneline -10 2>/dev/null || true",
             "echo '## Current git status:' && git status --short 2>/dev/null || true",
         ]
@@ -149,7 +142,6 @@ class Config:
     tmux: TmuxConfig = field(default_factory=TmuxConfig)
     docker: DockerConfig = field(default_factory=DockerConfig)
     lifecycle: LifecycleConfig = field(default_factory=LifecycleConfig)
-    focus: FocusConfig = field(default_factory=FocusConfig)
     symlinks: list[str] = field(default_factory=list)
     tui: TuiConfig = field(default_factory=TuiConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
@@ -192,22 +184,6 @@ def _parse_column_hooks(columns: list[dict[str, Any]]) -> list[ColumnHook]:
         )
         for col in columns
     ]
-
-
-def _parse_focus_config(data: dict[str, Any]) -> FocusConfig:
-    """Parse focus configuration including overrides."""
-    overrides = {}
-    for pattern, override_data in data.get("overrides", {}).items():
-        overrides[pattern] = FocusConfig(
-            on_focus=override_data.get("on_focus", []),
-            on_unfocus=override_data.get("on_unfocus", []),
-        )
-
-    return FocusConfig(
-        on_focus=data.get("on_focus", []),
-        on_unfocus=data.get("on_unfocus", []),
-        overrides=overrides,
-    )
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -289,6 +265,10 @@ def parse_config(data: dict[str, Any]) -> Config:
     docker = DockerConfig(
         enabled=docker_data.get("enabled", False),
         compose_file=docker_data.get("compose_file", "docker-compose.yml"),
+        project_name=docker_data.get("project_name", "directory"),
+        project_name_max_length=docker_data.get("project_name_max_length", 0),
+        up_command=docker_data.get("up_command", ""),
+        down_command=docker_data.get("down_command", ""),
     )
 
     lifecycle_data = data.get("lifecycle", {})
@@ -297,9 +277,6 @@ def parse_config(data: dict[str, Any]) -> Config:
         on_cleanup=lifecycle_data.get("on_cleanup", []),
         post_create=_parse_lifecycle_commands(lifecycle_data.get("post_create", [])),
     )
-
-    focus_data = data.get("focus", {})
-    focus = _parse_focus_config(focus_data)
 
     symlinks_data = data.get("symlinks", {})
     symlinks = symlinks_data.get("paths", [])
@@ -325,7 +302,6 @@ def parse_config(data: dict[str, Any]) -> Config:
         tmux=tmux,
         docker=docker,
         lifecycle=lifecycle,
-        focus=focus,
         symlinks=symlinks,
         tui=tui,
         claude=claude,
@@ -523,16 +499,6 @@ on_cleanup = []
 #     { cmd = "npm install", dirs = [] }
 # ]
 
-[focus]
-# Commands to run when this worktree gains focus
-on_focus = []
-# Commands to run when this worktree loses focus
-on_unfocus = []
-
-# Per-branch pattern overrides
-# [focus.overrides."feature-*"]
-# on_focus = ["just docker expose-db"]
-
 [symlinks]
 paths = [
     ".env.local",
@@ -541,6 +507,8 @@ paths = [
 [docker]
 enabled = false
 compose_file = "docker-compose.yml"
+# project_name = "directory"  # "directory" (default) or "branch"
+# project_name_max_length = 0  # 0 means no truncation
 
 # TUI column hooks
 # [[tui.columns]]
@@ -588,9 +556,6 @@ main_repo = "~/code/myproject"
 worktree_base = "~/code/myproject-worktrees"
 base_branch = "main"
 github_repo = "username/myproject"
-
-[projects.myproject.focus]
-on_focus = ["just docker expose-db"]
 
 [projects.another]
 name = "another"

@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 
 from fwts.config import Config
-from fwts.docker import compose_down, compose_up, has_docker_compose, project_name_from_branch
+from fwts.docker import compose_down, compose_up, derive_project_name, has_docker_compose
 from fwts.git import (
     Worktree,
     create_worktree,
@@ -19,9 +19,11 @@ from fwts.git import (
     has_graphite,
     list_worktrees,
     prune_worktrees,
+    push_branch,
     remote_branch_exists,
     remove_worktree,
 )
+from fwts.github import create_draft_pr, get_pr_by_branch, has_gh_cli
 from fwts.tmux import (
     attach_session,
     create_session,
@@ -192,6 +194,31 @@ def full_setup(
             except Exception as e:
                 console.print(f"  [yellow]Graphite init failed: {e}[/yellow]")
 
+    # Push branch and create draft PR for new worktrees
+    if not existing_worktree and config.project.github_repo and has_gh_cli():
+        try:
+            console.print("[blue]Pushing branch...[/blue]")
+            push_branch(branch, cwd=worktree_path)
+            # Check if a PR already exists before creating one
+            existing_pr = get_pr_by_branch(branch, config.project.github_repo)
+            if existing_pr:
+                console.print(f"  [green]PR already exists: {existing_pr.url}[/green]")
+            else:
+                console.print("[blue]Creating draft PR...[/blue]")
+                pr_title = display_name if display_name else branch
+                pr = create_draft_pr(
+                    branch,
+                    base_branch,
+                    repo=config.project.github_repo,
+                    title=pr_title,
+                )
+                if pr:
+                    console.print(f"  [green]Draft PR created: {pr.url}[/green]")
+                else:
+                    console.print("  [yellow]Could not create draft PR[/yellow]")
+        except Exception as e:
+            console.print(f"  [yellow]Push/PR failed: {e}[/yellow]")
+
     # Create or attach to tmux session
     if session_exists(session_name):
         console.print(f"[blue]Attaching to existing tmux session: {session_name}[/blue]")
@@ -215,7 +242,7 @@ def full_setup(
         if config.docker.enabled and has_docker_compose():
             console.print("[blue]Starting Docker services...[/blue]")
             try:
-                project_name = project_name_from_branch(branch)
+                project_name = derive_project_name(worktree_path, branch, config.docker)
                 compose_up(worktree_path, config.docker, project_name)
                 console.print("  [green]Docker services started[/green]")
             except Exception as e:
@@ -274,7 +301,7 @@ def full_cleanup(
     if config.docker.enabled and has_docker_compose() and path_exists:
         console.print("[blue]Stopping Docker services...[/blue]")
         try:
-            project_name = project_name_from_branch(branch)
+            project_name = derive_project_name(worktree_path, branch, config.docker)
             compose_down(worktree_path, config.docker, project_name, volumes=True)
             console.print("  [green]Docker services stopped[/green]")
         except Exception as e:

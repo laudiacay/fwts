@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console, Group
@@ -22,9 +23,15 @@ from rich.table import Table
 from rich.text import Text
 
 from fwts.config import Config
-from fwts.focus import get_focused_branch, has_focus
 from fwts.git import Worktree, list_worktrees
-from fwts.github import PRInfo, ReviewState, get_pr_by_branch, search_pr_by_ticket
+from fwts.github import (
+    DetailedPRInfo,
+    PRInfo,
+    ReviewState,
+    get_pr_by_branch,
+    list_prs_detailed,
+    search_pr_by_ticket,
+)
 from fwts.hooks import HookResult, get_builtin_hooks, run_all_hooks
 from fwts.tmux import session_exists, session_name_from_branch
 
@@ -74,6 +81,18 @@ def reset_terminal() -> None:
 # Auto-refresh interval in seconds
 AUTO_REFRESH_INTERVAL = 30
 
+# Package update detection
+_PACKAGE_SOURCE_FILE = Path(__file__)
+
+
+def _get_package_mtime() -> float:
+    """Get the mtime of the tui module file for update detection."""
+    try:
+        return _PACKAGE_SOURCE_FILE.stat().st_mtime
+    except Exception:
+        return 0.0
+
+
 # Arrow key escape sequences
 KEY_UP = "\x1b[A"
 KEY_DOWN = "\x1b[B"
@@ -115,6 +134,7 @@ class TUIMode(Enum):
     TICKETS_MINE = "tickets_mine"
     TICKETS_REVIEW = "tickets_review"
     TICKETS_ALL = "tickets_all"
+    PRS = "prs"
 
 
 @dataclass
@@ -138,6 +158,7 @@ class TUIState:
     # Cached Data
     worktrees: list[WorktreeInfo] = field(default_factory=list)
     tickets: list[TicketInfo] = field(default_factory=list)
+    prs: list[PRDisplayInfo] = field(default_factory=list)
 
     # Terminal State
     last_terminal_size: tuple[int, int] = (0, 0)
@@ -165,13 +186,22 @@ class WorktreeInfo:
 
     worktree: Worktree
     session_active: bool = False
-    has_focus: bool = False
+    docker_status: str | None = None
     hook_data: dict[str, HookResult] = field(default_factory=dict)
     pr_info: PRInfo | None = None
 
     @property
     def pr_url(self) -> str | None:
         return self.pr_info.url if self.pr_info else None
+
+
+@dataclass
+class PRDisplayInfo:
+    """PR info for display in PR dashboard mode."""
+
+    pr: DetailedPRInfo
+    has_local_worktree: bool = False
+    worktree_branch: str | None = None
 
 
 @dataclass
@@ -200,8 +230,10 @@ class FwtsTUI:
         self.state = TUIState(mode=initial_mode)
         self._refresh_lock = threading.Lock()
         self._pending_cleanup = False
-        self._pending_focus = False
+        self._pending_docker_down = False
+        self._pending_docker_up = False
         self._cleanup_func: Callable[..., None] | None = None
+        self._startup_mtime = _get_package_mtime()
 
     @property
     def viewport_size(self) -> int:
@@ -233,7 +265,6 @@ class FwtsTUI:
             info = WorktreeInfo(
                 worktree=wt,
                 session_active=session_exists(session_name),
-                has_focus=has_focus(wt, self.config),
             )
 
             # Fetch PR info
@@ -242,6 +273,27 @@ class FwtsTUI:
                     info.pr_info = get_pr_by_branch(wt.branch, github_repo)
 
             new_worktrees.append(info)
+
+        # Compute docker status for each worktree
+        if self.config.docker.enabled:
+            from fwts.docker import compose_ps, derive_project_name
+
+            for info in new_worktrees:
+                compose_file = info.worktree.path / self.config.docker.compose_file
+                if not compose_file.exists():
+                    info.docker_status = None
+                    continue
+                project = derive_project_name(
+                    info.worktree.path, info.worktree.branch, self.config.docker
+                )
+                services = compose_ps(info.worktree.path, self.config.docker, project_name=project)
+                running = [s for s in services if s.get("status", "").lower() == "running"]
+                if not services:
+                    info.docker_status = "none"
+                elif len(running) == len(services):
+                    info.docker_status = "all"
+                else:
+                    info.docker_status = "partial"
 
         # Get hooks (builtin + custom, custom overrides builtin with same name)
         builtin_hooks = get_builtin_hooks()
@@ -359,6 +411,46 @@ class FwtsTUI:
             self.state.status_style = "red"
             self.state.tickets = []
 
+    async def _load_pr_data(self) -> None:
+        """Load PR data for the PR dashboard mode."""
+        github_repo = self.config.project.github_repo
+        if not github_repo:
+            self.state.prs = []
+            self.state.status_message = "No github_repo configured"
+            self.state.status_style = "red"
+            return
+
+        try:
+            detailed_prs = list_prs_detailed(github_repo)
+
+            # Cross-reference with local worktrees
+            local_worktrees = self._get_feature_worktrees()
+            local_branches = {wt.branch.lower(): wt.branch for wt in local_worktrees}
+
+            pr_display_list = []
+            for pr in detailed_prs:
+                branch_lower = pr.branch.lower()
+                has_local = branch_lower in local_branches
+                worktree_branch = local_branches.get(branch_lower)
+                pr_display_list.append(
+                    PRDisplayInfo(
+                        pr=pr,
+                        has_local_worktree=has_local,
+                        worktree_branch=worktree_branch,
+                    )
+                )
+
+            # Sort: needs-your-review first, then by updatedAt (already sorted)
+            pr_display_list.sort(key=lambda p: (not p.pr.needs_your_review,))
+
+            with self._refresh_lock:
+                self.state.prs = list(pr_display_list)
+
+        except Exception as e:
+            self.state.status_message = f"Failed to load PRs: {e}"
+            self.state.status_style = "red"
+            self.state.prs = []
+
     async def _load_data(self) -> None:
         """Load data based on current mode."""
         with self._refresh_lock:
@@ -368,6 +460,8 @@ class FwtsTUI:
 
         if self.state.mode == TUIMode.WORKTREES:
             await self._load_worktree_data()
+        elif self.state.mode == TUIMode.PRS:
+            await self._load_pr_data()
         else:
             await self._load_ticket_data()
 
@@ -497,13 +591,13 @@ class FwtsTUI:
         """Get current list of items based on mode."""
         if self.state.mode == TUIMode.WORKTREES:
             return self.state.worktrees
+        if self.state.mode == TUIMode.PRS:
+            return self.state.prs
         return self.state.tickets
 
     def _render_worktree_table(self) -> Table:
         """Render the worktree table."""
         project_name = self.config.project.name or "fwts"
-        focused_branch = get_focused_branch(self.config)
-        focus_info = f" [green]◉ {focused_branch}[/green]" if focused_branch else ""
 
         # Add scroll indicator to title if there are more items than viewport
         scroll_info = ""
@@ -514,16 +608,20 @@ class FwtsTUI:
             scroll_info = f" [dim](showing {self.state.viewport_start + 1}-{viewport_end} of {len(self.state.worktrees)})[/dim]"
 
         table = Table(
-            title=f"[bold]{project_name}[/bold]{focus_info} [dim](worktrees)[/dim]{scroll_info}",
+            title=f"[bold]{project_name}[/bold] [dim](worktrees)[/dim]{scroll_info}",
             show_header=True,
             header_style="bold cyan",
             border_style="dim",
             expand=False,
         )
 
+        show_docker = self.config.docker.enabled
+
         table.add_column("", width=3)  # Selection/cursor
         table.add_column("Branch", style="bold", width=40)
         table.add_column("Tmux", width=5)
+        if show_docker:
+            table.add_column("Docker", width=6)
 
         # Add hook columns (builtin + custom, custom overrides builtin with same name)
         builtin_hooks = get_builtin_hooks()
@@ -547,7 +645,8 @@ class FwtsTUI:
         if not self.state.worktrees:
             # Calculate number of columns for proper rendering
             num_hook_cols = len(hooks)
-            empty_cols = [""] * (2 + num_hook_cols)  # tmux, hooks, PR
+            extra = 1 if show_docker else 0
+            empty_cols = [""] * (2 + extra + num_hook_cols)  # tmux, docker?, hooks, PR
             if self.state.loading:
                 table.add_row("", "[yellow]⟳ Loading worktrees...[/yellow]", *empty_cols)
             else:
@@ -575,6 +674,16 @@ class FwtsTUI:
             # Session status
             session = "[green]●[/green]" if info.session_active else "[dim]○[/dim]"
 
+            # Docker status indicator
+            docker_indicator = "[dim]-[/dim]"
+            if show_docker:
+                if info.docker_status == "all":
+                    docker_indicator = "[green]●[/green]"
+                elif info.docker_status == "partial":
+                    docker_indicator = "[yellow]◐[/yellow]"
+                elif info.docker_status == "none":
+                    docker_indicator = "[dim]○[/dim]"
+
             # Hook columns
             hook_values = []
             for hook in hooks:
@@ -593,7 +702,12 @@ class FwtsTUI:
             # Highlight row if at cursor
             style = "reverse" if idx == self.state.cursor else None
 
-            table.add_row(prefix, branch, session, *hook_values, pr_display, style=style)
+            if show_docker:
+                table.add_row(
+                    prefix, branch, session, docker_indicator, *hook_values, pr_display, style=style
+                )
+            else:
+                table.add_row(prefix, branch, session, *hook_values, pr_display, style=style)
 
         return table
 
@@ -629,6 +743,172 @@ class FwtsTUI:
 
         text.append(f" #{pr.number}", style="cyan")
         return text
+
+    @staticmethod
+    def _format_time_ago(iso_timestamp: str) -> str:
+        """Format an ISO timestamp as a relative time string."""
+        if not iso_timestamp:
+            return ""
+        try:
+            from datetime import datetime, timezone
+
+            # Parse ISO 8601 timestamp
+            ts = iso_timestamp.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(ts)
+            now = datetime.now(timezone.utc)
+            delta = now - dt
+            seconds = int(delta.total_seconds())
+            if seconds < 60:
+                return f"{seconds}s"
+            minutes = seconds // 60
+            if minutes < 60:
+                return f"{minutes}m"
+            hours = minutes // 60
+            if hours < 24:
+                return f"{hours}h"
+            days = hours // 24
+            if days < 30:
+                return f"{days}d"
+            return f"{days // 30}mo"
+        except Exception:
+            return ""
+
+    def _render_pr_table(self) -> Table:
+        """Render the PR dashboard table."""
+        project_name = self.config.project.name or "fwts"
+
+        scroll_info = ""
+        if len(self.state.prs) > self.viewport_size:
+            viewport_end = min(self.state.viewport_start + self.viewport_size, len(self.state.prs))
+            scroll_info = f" [dim](showing {self.state.viewport_start + 1}-{viewport_end} of {len(self.state.prs)})[/dim]"
+
+        table = Table(
+            title=f"[bold]{project_name}[/bold] [dim](open PRs)[/dim]{scroll_info}",
+            show_header=True,
+            header_style="bold cyan",
+            border_style="dim",
+            expand=False,
+        )
+
+        table.add_column("!", width=1)
+        table.add_column("#", width=5)
+        table.add_column("Author", width=12)
+        table.add_column("Title", ratio=1)
+        table.add_column("Labels", width=15)
+        table.add_column("CI", width=6)
+        table.add_column("Review", width=8)
+        table.add_column("Merge", width=8)
+        table.add_column("+/-", width=10)
+        table.add_column("Age", width=4)
+        table.add_column("W", width=1)
+
+        if not self.state.prs:
+            if self.state.loading or self.state.needs_refresh:
+                table.add_row(
+                    "", "", "", "[yellow]⟳ Loading PRs...[/yellow]", "", "", "", "", "", "", ""
+                )
+            else:
+                table.add_row(
+                    "", "", "", "[dim]No open PRs found[/dim]", "", "", "", "", "", "", ""
+                )
+            return table
+
+        viewport_end = min(self.state.viewport_start + self.viewport_size, len(self.state.prs))
+
+        for idx in range(self.state.viewport_start, viewport_end):
+            info = self.state.prs[idx]
+            pr = info.pr
+
+            # Needs review indicator
+            review_flag = Text("!", style="bold red") if pr.needs_your_review else Text(" ")
+
+            # PR number
+            num_text = Text(f"#{pr.number}", style="cyan")
+
+            # Author (truncate)
+            author = pr.author[:12] if pr.author else ""
+
+            # Title (will be auto-truncated by ratio column)
+            title = pr.title
+            title_style = "dim" if pr.is_draft else "bold"
+            if pr.is_draft:
+                title = f"[draft] {title}"
+
+            # Labels (compact)
+            label_parts = []
+            for label in pr.labels[:2]:  # max 2 labels
+                short = label[:7] if len(label) > 7 else label
+                label_parts.append(short)
+            labels_text = " ".join(label_parts) if label_parts else ""
+
+            # CI status
+            ci = pr.ci_summary
+            ci_style = {"pass": "green", "none": "dim"}.get(ci, "red" if "fail" in ci else "yellow")
+            ci_text = Text(ci, style=ci_style)
+
+            # Review decision
+            review_map = {
+                "APPROVED": ("apprvd", "green"),
+                "CHANGES_REQUESTED": ("changes", "red"),
+                "REVIEW_REQUIRED": ("pending", "yellow"),
+            }
+            review_label, review_style = review_map.get(pr.review_decision or "", ("—", "dim"))
+            review_text = Text(review_label, style=review_style)
+
+            # Merge state
+            merge_map = {
+                "CLEAN": ("ready", "green"),
+                "DIRTY": ("conflict", "red"),
+                "BLOCKED": ("blocked", "yellow"),
+                "BEHIND": ("behind", "yellow"),
+                "UNSTABLE": ("unstable", "yellow"),
+                "HAS_HOOKS": ("hooks", "yellow"),
+            }
+            if pr.in_merge_queue:
+                mq_state_map = {
+                    "QUEUED": "queued",
+                    "AWAITING_CHECKS": "mq:chks",
+                    "MERGEABLE": "mq:rdy",
+                    "UNMERGEABLE": "mq:fail",
+                    "LOCKED": "mq:lock",
+                }
+                mq_label = mq_state_map.get(pr.merge_queue_state or "", "queued")
+                if pr.merge_queue_position is not None:
+                    mq_label += f"#{pr.merge_queue_position + 1}"
+                merge_label, merge_style = mq_label, "blue"
+            else:
+                merge_label, merge_style = merge_map.get(pr.merge_state_status, ("—", "dim"))
+            merge_text = Text(merge_label, style=merge_style)
+
+            # Additions/deletions
+            diff_text = Text()
+            diff_text.append(f"+{pr.additions}", style="green")
+            diff_text.append("/", style="dim")
+            diff_text.append(f"-{pr.deletions}", style="red")
+
+            # Updated time
+            age = self._format_time_ago(pr.updated_at)
+
+            # Local worktree indicator
+            local = Text("*", style="green") if info.has_local_worktree else Text(" ")
+
+            style = "reverse" if idx == self.state.cursor else None
+            table.add_row(
+                review_flag,
+                num_text,
+                author,
+                Text(title, style=title_style),
+                labels_text,
+                ci_text,
+                review_text,
+                merge_text,
+                diff_text,
+                age,
+                local,
+                style=style,
+            )
+
+        return table
 
     def _render_ticket_table(self) -> Table:
         """Render the tickets table."""
@@ -712,6 +992,8 @@ class FwtsTUI:
         """Render table based on current mode."""
         if self.state.mode == TUIMode.WORKTREES:
             return self._render_worktree_table()
+        if self.state.mode == TUIMode.PRS:
+            return self._render_pr_table()
         return self._render_ticket_table()
 
     def _render_help(self) -> Text:
@@ -729,12 +1011,21 @@ class FwtsTUI:
             help_text.append(" all  ")
             help_text.append("enter", style="bold")
             help_text.append(" launch  ")
-            help_text.append("f", style="bold")
-            help_text.append(" focus  ")
             help_text.append("d", style="bold")
             help_text.append(" cleanup  ")
             help_text.append("l", style="bold")
             help_text.append(" unpushed  ")
+            help_text.append("o", style="bold")
+            help_text.append(" open PR  ")
+            if self.config.docker.down_command:
+                help_text.append("x", style="bold")
+                help_text.append(" docker↓  ")
+            if self.config.docker.up_command:
+                help_text.append("X", style="bold")
+                help_text.append(" docker↑  ")
+        elif self.state.mode == TUIMode.PRS:
+            help_text.append("enter", style="bold")
+            help_text.append(" launch/open  ")
             help_text.append("o", style="bold")
             help_text.append(" open PR  ")
         else:
@@ -760,7 +1051,9 @@ class FwtsTUI:
         help_text.append("3", style="bold")
         help_text.append(" reviews  ")
         help_text.append("4", style="bold")
-        help_text.append(" all tickets")
+        help_text.append(" all tickets  ")
+        help_text.append("5", style="bold")
+        help_text.append(" open PRs")
 
         return help_text
 
@@ -785,6 +1078,13 @@ class FwtsTUI:
             # Show auto-refresh info
             next_refresh = AUTO_REFRESH_INTERVAL - (elapsed % AUTO_REFRESH_INTERVAL)
             status.append(f" · auto-refresh in {next_refresh}s", style="dim")
+
+        # Check for package update
+        if _get_package_mtime() != self._startup_mtime:
+            status.append("\n")
+            status.append(
+                "⚡ fwts updated — restart for new version (q then re-run)", style="bold magenta"
+            )
 
         return status
 
@@ -847,6 +1147,17 @@ class FwtsTUI:
                             start_new_session=True,
                         )
                         self.set_status("Opening PR creation page...", "yellow")
+            elif self.state.mode == TUIMode.PRS:
+                # PR dashboard mode - open PR URL
+                if isinstance(item, PRDisplayInfo):
+                    subprocess.Popen(
+                        ["open", item.pr.url],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    self.set_status(f"Opened PR #{item.pr.number}", "green")
             else:
                 # Ticket modes
                 if isinstance(item, TicketInfo):
@@ -885,6 +1196,7 @@ class FwtsTUI:
             TUIMode.TICKETS_MINE,
             TUIMode.TICKETS_REVIEW,
             TUIMode.TICKETS_ALL,
+            TUIMode.PRS,
         ]
         current_idx = modes.index(self.state.mode)
         next_idx = (current_idx + 1) % len(modes)
@@ -893,7 +1205,7 @@ class FwtsTUI:
     def _handle_key(self, key: str) -> str | None:
         """Handle keyboard input.
 
-        Returns action to perform: 'launch', 'cleanup', 'focus', 'start_ticket', or None
+        Returns action to perform: 'launch', 'cleanup', 'start_ticket', or None
         """
         items = self._get_current_items()
 
@@ -916,6 +1228,9 @@ class FwtsTUI:
             return None
         if key == "4":
             self._switch_mode(TUIMode.TICKETS_ALL)
+            return None
+        if key == "5":
+            self._switch_mode(TUIMode.PRS)
             return None
 
         # Navigation
@@ -958,13 +1273,18 @@ class FwtsTUI:
                 # Run cleanup inline instead of returning
                 self._pending_cleanup = True
                 return None
-            elif key in ("f", "F"):
-                # Run focus inline instead of returning
-                self._pending_focus = True
-                return None
             elif key in ("l", "L"):
                 self._show_unpushed_commits()
                 return None
+            elif key == "x":
+                self._pending_docker_down = True
+                return None
+            elif key == "X":
+                self._pending_docker_up = True
+                return None
+        elif self.state.mode == TUIMode.PRS:
+            if key in ("\r", "\n"):
+                return "open_pr"
         else:
             # Ticket modes
             if key in ("\r", "\n"):
@@ -985,6 +1305,12 @@ class FwtsTUI:
         """Get currently selected ticket."""
         if 0 <= self.state.cursor < len(self.state.tickets):
             return self.state.tickets[self.state.cursor]
+        return None
+
+    def get_selected_pr(self) -> PRDisplayInfo | None:
+        """Get currently selected PR."""
+        if 0 <= self.state.cursor < len(self.state.prs):
+            return self.state.prs[self.state.cursor]
         return None
 
     def set_status(self, message: str, style: str = "dim") -> None:
@@ -1192,60 +1518,65 @@ class FwtsTUI:
         self.set_status("Cleanup complete - refreshing...", style="green")
         live.update(self._render(), refresh=True)
 
-    def _run_inline_focus(self, live: Live) -> None:
-        """Run focus inline within the TUI, then refresh."""
-        from fwts.focus import focus_worktree
-        from fwts.lifecycle import run_lifecycle_commands
+    def _run_inline_docker(self, live: Live, action: str) -> None:
+        """Run docker up/down for cursor worktree inline."""
+        if action == "down":
+            cmd = self.config.docker.down_command
+            label = "Stopping docker"
+        else:
+            cmd = self.config.docker.up_command
+            label = "Starting docker"
 
-        worktrees = self.get_selected_worktrees()
-        if not worktrees:
+        if not cmd:
+            self.set_status(f"No docker.{action}_command configured", "yellow")
+            return
+
+        if not self.state.worktrees or self.state.cursor >= len(self.state.worktrees):
             self.set_status("No worktree selected", "yellow")
             return
 
-        # Focus only works on one worktree
-        info = worktrees[0]
+        info = self.state.worktrees[self.state.cursor]
         branch = info.worktree.branch
+        cwd = info.worktree.path
 
-        self.set_status(f"Focusing on {branch}...", style="yellow")
-        live.update(self._render(), refresh=True)
+        spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        result: dict[str, Any] = {"done": False}
 
-        # Run focus (captures output via Rich console)
-        from io import StringIO
+        def _run() -> None:
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    shell=True,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    stdin=subprocess.DEVNULL,
+                    timeout=60,
+                )
+                result["success"] = proc.returncode == 0
+                result["error"] = proc.stderr.strip() if proc.returncode != 0 else None
+            except Exception as e:
+                result["success"] = False
+                result["error"] = str(e)
+            result["done"] = True
 
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        captured = StringIO()
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
 
-        try:
-            sys.stdout = captured
-            sys.stderr = captured
-            success = focus_worktree(info.worktree, self.config, force=True)
+        idx = 0
+        while not result["done"]:
+            s = spinner_chars[idx % len(spinner_chars)]
+            self.set_status(f"{s} {label}: {branch}...", "yellow")
+            live.update(self._render(), refresh=True)
+            idx += 1
+            time.sleep(0.1)
 
-            # Also run on_start commands in the worktree directory
-            if self.config.lifecycle.on_start:
-                run_lifecycle_commands("on_start", info.worktree.path, self.config)
-        except Exception as e:
-            success = False
-            captured.write(f"Error: {e}\n")
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-
-        if success:
-            self.set_status(f"✓ Focused on {branch}", style="green")
+        if result["success"]:
+            self.set_status(f"✓ {label}: {branch}", "green")
         else:
-            logs = captured.getvalue().strip()
-            # Extract key error
-            import re
-
-            clean_logs = re.sub(r"\x1b\[[0-9;]*m", "", logs)
-            short_error = clean_logs.split("\n")[-1] if clean_logs else "Unknown error"
-            self.set_status(f"⚠ Focus failed: {short_error}", style="yellow")
-
-        live.update(self._render(), refresh=True)
-
-        # Schedule non-blocking refresh to show focus indicator
+            self.set_status(f"✗ {label} failed: {result.get('error', '')[:60]}", "red")
         self.state.needs_refresh = True
+        live.update(self._render(), refresh=True)
 
     def _show_unpushed_commits(self) -> None:
         """Show unpushed commits for the selected worktree."""
@@ -1328,12 +1659,12 @@ class FwtsTUI:
         elif self.state.cursor >= self.state.viewport_start + self.viewport_size:
             self.state.viewport_start = self.state.cursor - self.viewport_size + 1
 
-    def run(self) -> tuple[str | None, list[WorktreeInfo] | TicketInfo | None]:
+    def run(self) -> tuple[str | None, list[WorktreeInfo] | TicketInfo | PRDisplayInfo | None]:
         """Run the TUI.
 
         Returns:
             Tuple of (action, data) where:
-            - action is 'launch', 'cleanup', 'focus', 'start_ticket', or None
+            - action is 'launch', 'cleanup', 'start_ticket', or None
             - data is list[WorktreeInfo] for worktree actions or TicketInfo for ticket actions
         """
         # Simple fallback for non-TTY or when keyboard input isn't available
@@ -1386,11 +1717,7 @@ class FwtsTUI:
                     live.update(self._render(), refresh=True)
 
                     # Get current items list based on mode
-                    items = (
-                        self.state.worktrees
-                        if self.state.mode == TUIMode.WORKTREES
-                        else self.state.tickets
-                    )
+                    items = self._get_current_items()
 
                     # Check for terminal resize
                     current_size = (console.width, console.height)
@@ -1417,6 +1744,8 @@ class FwtsTUI:
                         if action:
                             if action == "start_ticket":
                                 result_data = self.get_selected_ticket()
+                            elif action == "open_pr":
+                                result_data = self.get_selected_pr()
                             else:
                                 result_data = self.get_selected_worktrees()
                             self.state.running = False
@@ -1428,10 +1757,14 @@ class FwtsTUI:
                             self._run_inline_cleanup(live)
                             continue
 
-                        # Handle inline focus
-                        if self._pending_focus:
-                            self._pending_focus = False
-                            self._run_inline_focus(live)
+                        # Handle inline docker commands
+                        if self._pending_docker_down:
+                            self._pending_docker_down = False
+                            self._run_inline_docker(live, "down")
+                            continue
+                        if self._pending_docker_up:
+                            self._pending_docker_up = False
+                            self._run_inline_docker(live, "up")
                             continue
 
                     except KeyboardInterrupt:
@@ -1500,8 +1833,6 @@ def simple_list(config: Config) -> None:
         console.print("[dim]No feature worktrees found[/dim]")
         return
 
-    # Get focus info
-    get_focused_branch(config)
     github_repo = config.project.github_repo
 
     table = Table(show_header=True, header_style="bold cyan")

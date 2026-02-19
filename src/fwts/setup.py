@@ -186,10 +186,6 @@ layout = "{layout}"
 on_start = []
 on_cleanup = []
 
-[focus]
-on_focus = []
-on_unfocus = []
-
 [symlinks]
 paths = [
     ".env.local",

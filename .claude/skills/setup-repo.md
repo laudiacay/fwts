@@ -75,10 +75,6 @@ layout = "{layout}"
 on_start = [{on_start_commands}]
 on_cleanup = [{on_cleanup_commands}]
 
-[focus]
-on_focus = []
-on_unfocus = []
-
 [symlinks]
 paths = [{symlink_paths}]
 

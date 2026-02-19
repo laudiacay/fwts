@@ -255,6 +255,15 @@ def gather_claude_context(
         message = claude_config.init_template
         message = message.replace("{context}", context)
         message = message.replace("{ticket}", ticket_info)
+        # Build conditional ticket section
+        if ticket_info:
+            ticket_section = (
+                f"Working on ticket: {ticket_info}\n\n"
+                f"Use your Linear MCP to fetch the full ticket details for {ticket_info}."
+            )
+        else:
+            ticket_section = ""
+        message = message.replace("{ticket_section}", ticket_section)
     else:
         # Build default message
         parts = []

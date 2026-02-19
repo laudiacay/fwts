@@ -190,3 +190,32 @@ def project_name_from_branch(branch: str) -> str:
     name = re.sub(r"-+", "-", name)
     name = name.strip("-")
     return name or "fwts"
+
+
+def derive_project_name(worktree_path: Path, branch: str, config: DockerConfig) -> str:
+    """Derive a docker project name based on config strategy.
+
+    Args:
+        worktree_path: Path to the worktree directory
+        branch: Branch name
+        config: Docker configuration
+
+    Returns:
+        A valid docker project name.
+    """
+    import re
+
+    if config.project_name == "branch":
+        name = project_name_from_branch(branch)
+    else:
+        # "directory" strategy: use worktree directory name
+        name = worktree_path.name.lower()
+        name = re.sub(r"[^a-z0-9-]", "-", name)
+        name = re.sub(r"-+", "-", name)
+        name = name.strip("-")
+        name = name or "fwts"
+
+    if config.project_name_max_length > 0:
+        name = name[: config.project_name_max_length].strip("-")
+
+    return name or "fwts"

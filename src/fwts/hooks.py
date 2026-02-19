@@ -62,14 +62,15 @@ async def run_hook(
                 break
 
     try:
-        process = await anyio.run_process(
-            ["bash", "-c", hook_cmd],
-            env=env,
-            cwd=worktree.path,
-            stdin=subprocess.DEVNULL,
-        )
+        with anyio.fail_after(timeout):
+            process = await anyio.run_process(
+                ["bash", "-c", hook_cmd],
+                env=env,
+                cwd=worktree.path,
+                stdin=subprocess.DEVNULL,
+            )
         output = process.stdout.decode().strip()
-    except asyncio.TimeoutError:
+    except TimeoutError:
         output = "timeout"
     except Exception:
         output = "error"
@@ -251,48 +252,35 @@ def get_builtin_hooks() -> list[ColumnHook]:
         # Note: PR status is now handled inline in the TUI, not as a hook
         ColumnHook(
             name="Claude",
-            # Check Claude status in tmux session
+            # Check Claude status via status file (written by Claude Code hooks)
+            # Falls back to tmux session detection
             # Output: "typing", "waiting", "idle", "off"
             hook=r"""
                 # Convert branch name to session name (replace / and . with -)
-                session=$(echo "$BRANCH_NAME" | sed 's/[\/.]/-/g')
+                session=$(echo "$BRANCH_NAME" | tr '/.' '-')
 
-                # Check if session exists
+                # Check status file first (written by Claude Code Stop/UserPromptSubmit hooks)
+                status_file="/tmp/fwts-claude-$session"
+                if [ -f "$status_file" ]; then
+                    cat "$status_file"
+                    exit 0
+                fi
+
+                # Fallback: check if tmux session exists with claude running
                 if ! tmux has-session -t "$session" 2>/dev/null; then
                     echo "off"
                     exit 0
                 fi
 
-                # Check if claude process is running in the session
-                pane_pid=$(tmux list-panes -t "$session" -F '#{pane_pid}' 2>/dev/null | head -1)
-                if [ -z "$pane_pid" ]; then
-                    echo "off"
-                    exit 0
-                fi
-
-                # Check for claude process in the pane's process tree
-                if pgrep -P "$pane_pid" -f "claude" >/dev/null 2>&1; then
-                    # Claude is running - check if it's actively generating
-                    # Capture recent pane content
-                    content=$(tmux capture-pane -t "$session" -p -S -5 2>/dev/null | tail -5)
-
-                    # Check for thinking/typing indicators
-                    if echo "$content" | grep -qE '(⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Thinking|typing|\.\.\.|\[.*\])'; then
+                # Check if any pane is running claude
+                for line in $(tmux list-panes -t "$session" -F '#{pane_index}:#{pane_pid}' 2>/dev/null); do
+                    pid="${line#*:}"
+                    if pgrep -P "$pid" -f "claude" >/dev/null 2>&1; then
                         echo "typing"
-                    elif echo "$content" | grep -qE '(❯|>|\$|claude>)[ ]*$'; then
-                        echo "waiting"
-                    else
-                        echo "typing"
+                        exit 0
                     fi
-                else
-                    # No claude process - check if at prompt
-                    content=$(tmux capture-pane -t "$session" -p -S -2 2>/dev/null | tail -2)
-                    if echo "$content" | grep -qE '(❯|>|\$)[ ]*$'; then
-                        echo "idle"
-                    else
-                        echo "idle"
-                    fi
-                fi
+                done
+                echo "idle"
             """,
             color_map={
                 "typing": "green",

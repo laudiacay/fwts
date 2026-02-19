@@ -17,12 +17,6 @@ from fwts.config import (
     list_projects,
     load_config,
 )
-from fwts.focus import (
-    focus_worktree,
-    get_focus_state,
-    get_focused_branch,
-    unfocus,
-)
 from fwts.git import list_worktrees
 from fwts.github import get_branch_from_pr, has_gh_cli
 from fwts.lifecycle import full_cleanup, full_setup, get_worktree_for_input
@@ -30,7 +24,7 @@ from fwts.linear import resolve_ticket_to_branch
 from fwts.paths import ensure_config_dir, get_global_config_path
 from fwts.setup import interactive_setup
 from fwts.tmux import attach_session, session_exists, session_name_from_branch
-from fwts.tui import FwtsTUI, TicketInfo, TUIMode, simple_list
+from fwts.tui import FwtsTUI, PRDisplayInfo, TicketInfo, TUIMode, simple_list
 
 app = typer.Typer(
     name="fwts",
@@ -183,6 +177,8 @@ def start(
                     full_setup(info.worktree.branch, config, base)
         elif action == "start_ticket" and selected and isinstance(selected, TicketInfo):
             _start_ticket_worktree(selected, config)
+        elif action == "open_pr" and selected and isinstance(selected, PRDisplayInfo):
+            _handle_pr_action(selected, config)
         return
 
     # Resolve input to branch name and get ticket info if applicable
@@ -283,12 +279,11 @@ def status(
     - a: select all (worktrees mode)
     - enter: launch/start worktree
     - d: cleanup selected
-    - f: focus selected
     - o: open ticket/PR in browser
     - p: open PR in browser (tickets mode)
     - r: refresh
     - tab: cycle modes
-    - 1-4: switch modes (worktrees, my tickets, reviews, all tickets)
+    - 1-5: switch modes (worktrees, my tickets, reviews, all tickets, open PRs)
     - q: quit
     """
     config = _get_config(project, config_path)
@@ -305,12 +300,12 @@ def status(
                 attach_session(session_name)
             else:
                 full_setup(info.worktree.branch, config)
-    elif action == "focus" and result and isinstance(result, list):
-        # Focus the first selected worktree
-        focus_worktree(result[0].worktree, config, force=True)
     elif action == "start_ticket" and result and isinstance(result, TicketInfo):
         # Start worktree from ticket
         _start_ticket_worktree(result, config)
+    elif action == "open_pr" and result and isinstance(result, PRDisplayInfo):
+        # Handle PR action (launch worktree or open in browser)
+        _handle_pr_action(result, config)
 
 
 @app.command(name="list")
@@ -321,62 +316,6 @@ def list_cmd(
     """Simple list of worktrees (non-interactive)."""
     config = _get_config(project, config_path)
     simple_list(config)
-
-
-@app.command()
-def focus(
-    input: Annotated[
-        str | None,
-        typer.Argument(help="Branch name or worktree path to focus"),
-    ] = None,
-    clear: Annotated[
-        bool,
-        typer.Option("--clear", help="Clear focus (unfocus current worktree)"),
-    ] = False,
-    show: Annotated[
-        bool,
-        typer.Option("--show", "-s", help="Show current focus status"),
-    ] = False,
-    force: Annotated[
-        bool,
-        typer.Option("--force", "-f", help="Force focus switch"),
-    ] = False,
-    project: ProjectOption = None,
-    config_path: ConfigOption = None,
-) -> None:
-    """Switch focus to a worktree, claiming shared resources.
-
-    Focus runs configured commands (like `just docker expose-db`) to claim
-    shared resources like database ports for the selected worktree.
-
-    Only one worktree per project can have focus at a time.
-    """
-    config = _get_config(project, config_path)
-
-    if show or (not input and not clear):
-        # Show current focus status
-        state = get_focus_state(config)
-        if state.branch:
-            console.print(f"[green]Focused:[/green] {state.branch}")
-            console.print(f"[dim]Path: {state.worktree_path}[/dim]")
-            if state.focused_at:
-                console.print(f"[dim]Since: {state.focused_at.strftime('%Y-%m-%d %H:%M')}[/dim]")
-        else:
-            console.print("[dim]No worktree currently has focus[/dim]")
-        return
-
-    if clear:
-        unfocus(config)
-        return
-
-    # Find the worktree to focus
-    assert input is not None  # Guarded by condition on line 290
-    worktree = get_worktree_for_input(input, config)
-    if not worktree:
-        console.print(f"[red]No worktree found matching: {input}[/red]")
-        raise typer.Exit(1)
-
-    focus_worktree(worktree, config, force=force)
 
 
 @app.command()
@@ -394,7 +333,7 @@ def statusline(
 ) -> None:
     """Output compact status for shell/statusline integration.
 
-    Prints a single line with focused worktree and brief status.
+    Prints a single line with branch info and brief status.
     Designed for use in shell prompts or Claude Code statusline.
 
     Use --obvious for human-readable output instead of symbols.
@@ -432,9 +371,6 @@ def statusline(
     feature_worktrees = [
         wt for wt in worktrees if not wt.is_bare and wt.branch != config.project.base_branch
     ]
-
-    # Get focus info
-    focused = get_focused_branch(config)
 
     # Get git info for current directory
     import subprocess
@@ -507,9 +443,6 @@ def statusline(
         if insertions or deletions:
             parts.append(f"(+{insertions}/-{deletions} vs {base})")
 
-        if focused:
-            parts.append(f"focused:{focused}")
-
         wt_count = len(feature_worktrees)
         if wt_count > 0:
             parts.append(f"{wt_count} worktrees")
@@ -536,9 +469,6 @@ def statusline(
         if insertions or deletions:
             parts.append(f"+{insertions}/-{deletions}")
 
-        if focused:
-            parts.append(f"🎯{focused}")
-
         wt_count = len(feature_worktrees)
         if wt_count > 0:
             parts.append(f"{wt_count}wt")
@@ -562,16 +492,13 @@ def projects() -> None:
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Project")
-    table.add_column("Focus")
 
     for name in project_names:
         try:
-            config = load_config(project_name=name)
-            focused = get_focused_branch(config)
-            focus_str = f"[green]{focused}[/green]" if focused else "[dim]-[/dim]"
-            table.add_row(name, focus_str)
+            load_config(project_name=name)
+            table.add_row(name)
         except Exception:
-            table.add_row(name, "[red]error[/red]")
+            table.add_row(name)
 
     console.print(table)
 
@@ -726,8 +653,33 @@ def tickets(
                 attach_session(session_name)
             else:
                 full_setup(info.worktree.branch, config)
-    elif action == "focus" and result and isinstance(result, list):
-        focus_worktree(result[0].worktree, config, force=True)
+    elif action == "open_pr" and result and isinstance(result, PRDisplayInfo):
+        _handle_pr_action(result, config)
+
+
+def _handle_pr_action(pr_display: PRDisplayInfo, config: Config) -> None:
+    """Handle Enter on a PR: launch worktree if exists, else open in browser."""
+    import subprocess
+
+    if pr_display.has_local_worktree and pr_display.worktree_branch:
+        # Launch the worktree
+        session_name = session_name_from_branch(pr_display.worktree_branch)
+        if session_exists(session_name):
+            console.print(f"[blue]Attaching to session: {session_name}[/blue]")
+            attach_session(session_name)
+        else:
+            console.print(f"[blue]Setting up worktree for {pr_display.worktree_branch}[/blue]")
+            full_setup(pr_display.worktree_branch, config)
+    else:
+        # Open PR in browser
+        console.print(f"[blue]Opening PR #{pr_display.pr.number} in browser[/blue]")
+        subprocess.Popen(
+            ["open", pr_display.pr.url],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
 
 if __name__ == "__main__":

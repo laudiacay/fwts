@@ -36,18 +36,6 @@ on_cleanup = ["just down"]  # Run before worktree removal
 #     ]}
 # ]
 
-# Focus commands - for claiming shared resources
-[focus]
-on_focus = ["just docker expose-db"]  # Run when this worktree gains focus
-on_unfocus = []                        # Run when this worktree loses focus
-
-# Per-branch pattern overrides for focus commands
-# [focus.overrides."claudia-*"]
-# on_focus = ["just docker expose-db", "just connect dev-tunnel"]
-
-# [focus.overrides."test-*"]
-# on_focus = []  # No focus commands for test branches
-
 [symlinks]
 # Files to symlink from main repo to worktree
 paths = [

@@ -59,6 +59,7 @@ def _parse_ticket_input(input_str: str) -> str:
     - Just the number: "123"
     - Full identifier: "SUP-123"
     - Linear URL: "https://linear.app/team/issue/SUP-123/..."
+    - Branch-name-like: "sup-2051-external-services"
     """
     # Check if it's a URL
     url_match = re.search(r"linear\.app/[^/]+/issue/([A-Z]+-\d+)", input_str)
@@ -66,12 +67,17 @@ def _parse_ticket_input(input_str: str) -> str:
         return url_match.group(1)
 
     # Check if it already has a prefix
-    if re.match(r"^[A-Z]+-\d+$", input_str):
-        return input_str
+    if re.match(r"^[A-Z]+-\d+$", input_str, re.IGNORECASE):
+        return input_str.upper()
 
     # Just a number - we'll need to query for it
     if input_str.isdigit():
         return input_str
+
+    # Try to extract a ticket identifier from branch-name-like strings
+    ticket_match = re.search(r"([A-Z]+-\d+)", input_str, re.IGNORECASE)
+    if ticket_match:
+        return ticket_match.group(1).upper()
 
     return input_str
 
