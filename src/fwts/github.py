@@ -584,6 +584,120 @@ def get_branch_from_pr(pr_ref: str, repo: str | None = None) -> str | None:
     return pr.branch if pr else None
 
 
+def get_review_comments(pr_number: int, repo: str) -> list[dict]:
+    """Fetch review comments (top-level reviews + line-level comments) for a PR.
+
+    Returns a list of comment dicts with author, type, body, path, etc.
+    """
+    results = []
+
+    # Top-level reviews
+    review_result = _run_gh(
+        [
+            "api",
+            f"repos/{repo}/pulls/{pr_number}/reviews",
+            "--jq",
+            ".[] | {author: .user.login, state, body, submitted_at: .submitted_at}",
+        ],
+        check=False,
+    )
+    if review_result.returncode == 0 and review_result.stdout.strip():
+        for line in review_result.stdout.strip().split("\n"):
+            if line.strip():
+                try:
+                    review = json.loads(line)
+                    results.append(
+                        {
+                            "type": "review",
+                            "author": review.get("author", ""),
+                            "state": review.get("state", ""),
+                            "body": review.get("body", ""),
+                            "submitted_at": review.get("submitted_at", ""),
+                        }
+                    )
+                except json.JSONDecodeError:
+                    continue
+
+    # Line-level review comments
+    comment_result = _run_gh(
+        [
+            "api",
+            f"repos/{repo}/pulls/{pr_number}/comments",
+            "--jq",
+            ".[] | {author: .user.login, path, line: (.line // .original_line), body, created_at, in_reply_to_id}",
+        ],
+        check=False,
+    )
+    if comment_result.returncode == 0 and comment_result.stdout.strip():
+        for line in comment_result.stdout.strip().split("\n"):
+            if line.strip():
+                try:
+                    comment = json.loads(line)
+                    results.append(
+                        {
+                            "type": "line_comment",
+                            "author": comment.get("author", ""),
+                            "path": comment.get("path", ""),
+                            "line": comment.get("line"),
+                            "body": comment.get("body", ""),
+                            "created_at": comment.get("created_at", ""),
+                            "is_reply": comment.get("in_reply_to_id") is not None,
+                        }
+                    )
+                except json.JSONDecodeError:
+                    continue
+
+    return results
+
+
+def get_failed_run_ids(pr_number: int, repo: str) -> list[dict]:
+    """Get workflow run IDs for failed checks on a PR, so logs can be fetched.
+
+    Returns list of {run_id, name, conclusion, url}.
+    """
+    # Get the PR's head SHA
+    sha_result = _run_gh(
+        [
+            "pr",
+            "view",
+            str(pr_number),
+            "--repo",
+            repo,
+            "--json",
+            "headRefOid",
+            "--jq",
+            ".headRefOid",
+        ],
+        check=False,
+    )
+    if sha_result.returncode != 0 or not sha_result.stdout.strip():
+        return []
+
+    sha = sha_result.stdout.strip()
+
+    # Get check runs for that SHA
+    runs_result = _run_gh(
+        [
+            "api",
+            f"repos/{repo}/commits/{sha}/check-runs",
+            "--jq",
+            '.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | {id: .id, name, conclusion, html_url}',
+        ],
+        check=False,
+    )
+    if runs_result.returncode != 0 or not runs_result.stdout.strip():
+        return []
+
+    results = []
+    for line in runs_result.stdout.strip().split("\n"):
+        if line.strip():
+            try:
+                results.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return results
+
+
 def get_ci_status(branch: str, repo: str | None = None) -> str:
     """Get CI status for a branch.
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fwts"
-version = "0.1.48"
+version = "0.1.49"
 description = "Git worktree workflow manager for feature development"
 readme = "README.md"
 license = "MIT"
@@ -76,6 +76,8 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 "src/fwts/tui.py" = ["E501"]
 # MCP server has long instruction strings
 "src/fwts/mcp_server.py" = ["E501"]
+# GitHub API jq queries are long
+"src/fwts/github.py" = ["E501"]
 
 [tool.pyright]
 pythonVersion = "3.10"

@@ -8,7 +8,7 @@ from mcp.server.fastmcp import FastMCP
 
 from fwts.config import load_config
 from fwts.git import Worktree, list_worktrees
-from fwts.github import DetailedPRInfo, list_prs_detailed
+from fwts.github import DetailedPRInfo, get_failed_run_ids, get_review_comments, list_prs_detailed
 from fwts.tmux import session_exists, session_name_from_branch
 
 server = FastMCP(
@@ -219,6 +219,153 @@ async def fwts_tickets(mode: str = "mine", project: str | None = None) -> list[d
         )
 
     return results
+
+
+@server.tool()
+def fwts_ci_failures(project: str | None = None) -> list[dict]:
+    """Get detailed CI failure info for all PRs with failing checks.
+
+    Returns each failing PR with the specific check names that failed and
+    run IDs for fetching logs. Only includes PRs where you have a local worktree.
+
+    Args:
+        project: Named project from global config, or auto-detect from cwd if omitted
+    """
+    config = _load_project_config(project)
+    github_repo = config.project.github_repo
+    if not github_repo:
+        return []
+
+    all_prs = list_prs_detailed(github_repo)
+    worktrees = _get_feature_worktrees(config)
+    local_branches = {wt.branch.lower(): str(wt.path) for wt in worktrees}
+
+    results = []
+    for pr in all_prs:
+        # Only report failures on PRs with local worktrees
+        worktree_path = local_branches.get(pr.branch.lower())
+        if not worktree_path:
+            continue
+
+        fail_conclusions = ("failure", "timed_out", "action_required")
+        failed_checks = [c for c in pr.status_checks if c.conclusion in fail_conclusions]
+        if not failed_checks:
+            continue
+
+        # Get run IDs for log fetching
+        failed_runs = get_failed_run_ids(pr.number, github_repo)
+
+        results.append(
+            {
+                "number": pr.number,
+                "title": pr.title,
+                "branch": pr.branch,
+                "url": pr.url,
+                "worktree_path": worktree_path,
+                "ticket_id": pr.ticket_id,
+                "failed_checks": [
+                    {"name": c.name, "conclusion": c.conclusion} for c in failed_checks
+                ],
+                "failed_runs": failed_runs,
+                "merge_state_status": pr.merge_state_status,
+            }
+        )
+
+    return results
+
+
+@server.tool()
+def fwts_review_comments(pr_number: int, project: str | None = None) -> list[dict]:
+    """Get review comments (top-level reviews + line-level comments) for a PR.
+
+    Args:
+        pr_number: The PR number to fetch comments for
+        project: Named project from global config, or auto-detect from cwd if omitted
+    """
+    config = _load_project_config(project)
+    github_repo = config.project.github_repo
+    if not github_repo:
+        return []
+
+    return get_review_comments(pr_number, github_repo)
+
+
+@server.tool()
+def fwts_actionable(project: str | None = None) -> dict:
+    """Get a prioritized summary of what needs attention across all your PRs.
+
+    Groups PRs into: ci_failures, needs_rebase, has_conflicts, review_comments_pending,
+    ready_for_merge_queue, needs_review, and in_merge_queue. Only includes PRs where
+    you have a local worktree.
+
+    Args:
+        project: Named project from global config, or auto-detect from cwd if omitted
+    """
+    config = _load_project_config(project)
+    github_repo = config.project.github_repo
+    if not github_repo:
+        return {"error": "No github_repo configured"}
+
+    all_prs = list_prs_detailed(github_repo)
+    worktrees = _get_feature_worktrees(config)
+    local_branches = {wt.branch.lower(): str(wt.path) for wt in worktrees}
+
+    ci_failures = []
+    needs_rebase = []
+    has_conflicts = []
+    ready_for_queue = []
+    needs_review = []
+    in_queue = []
+    changes_requested = []
+
+    for pr in all_prs:
+        worktree_path = local_branches.get(pr.branch.lower())
+        if not worktree_path:
+            continue
+        if pr.is_draft:
+            continue
+
+        entry = {
+            "number": pr.number,
+            "title": pr.title,
+            "branch": pr.branch,
+            "url": pr.url,
+            "worktree_path": worktree_path,
+            "ticket_id": pr.ticket_id,
+        }
+
+        # Categorize
+        fail_conclusions = ("failure", "timed_out", "action_required")
+        failed_checks = [c for c in pr.status_checks if c.conclusion in fail_conclusions]
+
+        if pr.in_merge_queue:
+            entry["merge_queue_state"] = pr.merge_queue_state
+            entry["merge_queue_position"] = pr.merge_queue_position
+            in_queue.append(entry)
+        elif pr.mergeable == "CONFLICTING" or pr.merge_state_status == "DIRTY":
+            has_conflicts.append(entry)
+        elif failed_checks:
+            entry["failed_checks"] = [c.name for c in failed_checks]
+            ci_failures.append(entry)
+        elif pr.merge_state_status == "BEHIND":
+            needs_rebase.append(entry)
+        elif pr.review_decision == "CHANGES_REQUESTED":
+            changes_requested.append(entry)
+        elif pr.review_decision == "APPROVED" and pr.ci_summary == "pass":
+            ready_for_queue.append(entry)
+        elif pr.review_decision in ("REVIEW_REQUIRED", None, ""):
+            entry["review_requestees"] = pr.review_requestees
+            needs_review.append(entry)
+
+    return {
+        "ci_failures": ci_failures,
+        "has_conflicts": has_conflicts,
+        "needs_rebase": needs_rebase,
+        "changes_requested": changes_requested,
+        "needs_review": needs_review,
+        "ready_for_merge_queue": ready_for_queue,
+        "in_merge_queue": in_queue,
+    }
 
 
 def main():
