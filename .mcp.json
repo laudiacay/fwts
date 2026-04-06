@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fwts": {
+      "command": "/Users/laudiacay/code/fwts/.venv/bin/fwts-mcp",
+      "args": []
+    }
+  }
+}

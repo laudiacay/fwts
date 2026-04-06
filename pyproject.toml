@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fwts"
-version = "0.1.45"
+version = "0.1.46"
 description = "Git worktree workflow manager for feature development"
 readme = "README.md"
 license = "MIT"
@@ -33,6 +33,7 @@ dependencies = [
     "tomli>=2.0.0;python_version<'3.11'",
     "rich>=13.0.0",
     "anyio>=4.0.0",
+    "mcp>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,7 @@ dev = [
 [project.scripts]
 fwts = "fwts.cli:app"
 fb = "fwts.cli:app"
+fwts-mcp = "fwts.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/laudiacay/fwts"
@@ -72,6 +74,8 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 "src/fwts/config.py" = ["E501"]
 # TUI messages can be long
 "src/fwts/tui.py" = ["E501"]
+# MCP server has long instruction strings
+"src/fwts/mcp_server.py" = ["E501"]
 
 [tool.pyright]
 pythonVersion = "3.10"
