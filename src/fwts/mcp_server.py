@@ -15,14 +15,16 @@ server = FastMCP(
     name="fwts",
     instructions=(
         "fwts is a git worktree workflow manager. Use these tools to query "
-        "worktree status, open PRs (with merge queue), and Linear tickets."
+        "worktree status, open PRs (with merge queue), and Linear tickets. "
+        "Pass the 'project' parameter to target a specific fwts project by name "
+        "(as defined in ~/.config/fwts/config.toml), or omit it to auto-detect from cwd."
     ),
 )
 
 
-def _load_project_config():
-    """Load config, auto-detecting project from cwd."""
-    return load_config()
+def _load_project_config(project: str | None = None):
+    """Load config, optionally targeting a named project."""
+    return load_config(project_name=project)
 
 
 def _get_feature_worktrees(config) -> list[Worktree]:
@@ -79,9 +81,13 @@ def _pr_to_dict(pr: DetailedPRInfo) -> dict:
 
 
 @server.tool()
-def fwts_config() -> dict:
-    """Get the current fwts project configuration."""
-    config = _load_project_config()
+def fwts_config(project: str | None = None) -> dict:
+    """Get the current fwts project configuration.
+
+    Args:
+        project: Named project from global config, or auto-detect from cwd if omitted
+    """
+    config = _load_project_config(project)
     return {
         "project_name": config.project.name,
         "main_repo": str(config.project.main_repo),
@@ -93,9 +99,13 @@ def fwts_config() -> dict:
 
 
 @server.tool()
-def fwts_worktrees() -> list[dict]:
-    """List all feature worktrees with tmux session, PR, and merge queue status."""
-    config = _load_project_config()
+def fwts_worktrees(project: str | None = None) -> list[dict]:
+    """List all feature worktrees with tmux session, PR, and merge queue status.
+
+    Args:
+        project: Named project from global config, or auto-detect from cwd if omitted
+    """
+    config = _load_project_config(project)
     worktrees = _get_feature_worktrees(config)
     github_repo = config.project.github_repo
 
@@ -120,9 +130,13 @@ def fwts_worktrees() -> list[dict]:
 
 
 @server.tool()
-def fwts_prs() -> list[dict]:
-    """List all open PRs with CI status, review state, and merge queue position."""
-    config = _load_project_config()
+def fwts_prs(project: str | None = None) -> list[dict]:
+    """List all open PRs with CI status, review state, and merge queue position.
+
+    Args:
+        project: Named project from global config, or auto-detect from cwd if omitted
+    """
+    config = _load_project_config(project)
     github_repo = config.project.github_repo
     if not github_repo:
         return []
@@ -143,15 +157,16 @@ def fwts_prs() -> list[dict]:
 
 
 @server.tool()
-async def fwts_tickets(mode: str = "mine") -> list[dict]:
+async def fwts_tickets(mode: str = "mine", project: str | None = None) -> list[dict]:
     """List Linear tickets with PR cross-references.
 
     Args:
         mode: Which tickets to fetch — "mine", "review", or "all"
+        project: Named project from global config, or auto-detect from cwd if omitted
     """
     from fwts.linear import list_my_tickets, list_review_requests, list_team_tickets
 
-    config = _load_project_config()
+    config = _load_project_config(project)
     api_key = config.linear.api_key
     github_repo = config.project.github_repo
 
