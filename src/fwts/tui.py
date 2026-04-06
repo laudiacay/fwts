@@ -26,11 +26,7 @@ from fwts.config import Config
 from fwts.git import Worktree, list_worktrees
 from fwts.github import (
     DetailedPRInfo,
-    PRInfo,
-    ReviewState,
-    get_pr_by_branch,
     list_prs_detailed,
-    search_pr_by_ticket,
 )
 from fwts.hooks import HookResult, get_builtin_hooks, run_all_hooks
 from fwts.tmux import session_exists, session_name_from_branch
@@ -188,7 +184,7 @@ class WorktreeInfo:
     session_active: bool = False
     docker_status: str | None = None
     hook_data: dict[str, HookResult] = field(default_factory=dict)
-    pr_info: PRInfo | None = None
+    pr_info: DetailedPRInfo | None = None
 
     @property
     def pr_url(self) -> str | None:
@@ -219,7 +215,7 @@ class TicketInfo:
     branch_name: str
     # Added for cross-referencing with local state
     has_local_worktree: bool = False
-    pr_info: PRInfo | None = None
+    pr_info: DetailedPRInfo | None = None
 
 
 class FwtsTUI:
@@ -253,10 +249,9 @@ class FwtsTUI:
             if not wt.is_bare and wt.branch != self.config.project.base_branch
         ]
 
-    async def _load_worktree_data(self) -> None:
+    async def _load_worktree_data(self, pr_lookup: dict[str, DetailedPRInfo]) -> None:
         """Load worktree data and run hooks."""
         worktrees = self._get_feature_worktrees()
-        github_repo = self.config.project.github_repo
 
         # Create WorktreeInfo objects
         new_worktrees = []
@@ -265,12 +260,8 @@ class FwtsTUI:
             info = WorktreeInfo(
                 worktree=wt,
                 session_active=session_exists(session_name),
+                pr_info=pr_lookup.get(wt.branch.lower()),
             )
-
-            # Fetch PR info
-            if github_repo:
-                with contextlib.suppress(Exception):
-                    info.pr_info = get_pr_by_branch(wt.branch, github_repo)
 
             new_worktrees.append(info)
 
@@ -317,12 +308,13 @@ class FwtsTUI:
         with self._refresh_lock:
             self.state.worktrees = new_worktrees
 
-    async def _load_ticket_data(self) -> None:
+    async def _load_ticket_data(
+        self, pr_lookup: dict[str, DetailedPRInfo], pr_by_ticket: dict[str, DetailedPRInfo]
+    ) -> None:
         """Load tickets from Linear based on current mode."""
         from fwts.linear import list_my_tickets, list_review_requests, list_team_tickets
 
         api_key = self.config.linear.api_key
-        github_repo = self.config.project.github_repo
 
         # Get local worktrees to cross-reference
         local_worktrees = self._get_feature_worktrees()
@@ -340,23 +332,18 @@ class FwtsTUI:
 
             self.state.tickets = []
             for t in raw_tickets:
-                # Check if we have a local worktree for this ticket
-                # Match by ticket identifier in branch name
                 has_local = any(
                     t.identifier.lower() in branch
                     or (t.branch_name and t.branch_name.lower() == branch)
                     for branch in local_branches
                 )
 
-                # Try to get PR info - first by branch name, then by ticket search
+                # Match PR from bulk-fetched data: by branch name, then by ticket ID
                 pr_info = None
-                if github_repo:
-                    with contextlib.suppress(Exception):
-                        if t.branch_name:
-                            pr_info = get_pr_by_branch(t.branch_name, github_repo)
-                        if not pr_info:
-                            # Fallback: search by ticket identifier
-                            pr_info = search_pr_by_ticket(t.identifier, github_repo)
+                if t.branch_name:
+                    pr_info = pr_lookup.get(t.branch_name.lower())
+                if not pr_info:
+                    pr_info = pr_by_ticket.get(t.identifier.upper())
 
                 self.state.tickets.append(
                     TicketInfo(
@@ -374,30 +361,24 @@ class FwtsTUI:
                     )
                 )
 
-            # Sort tickets by status workflow position, then by PR status, then priority
-            # state_type is Linear's workflow category (backlog, unstarted, started, completed, canceled)
             type_order = {
-                "started": 0,  # In Progress (any custom state name)
-                "unstarted": 1,  # Todo
-                "backlog": 2,  # Backlog
-                "completed": 3,  # Done
-                "canceled": 4,  # Canceled
+                "started": 0,
+                "unstarted": 1,
+                "backlog": 2,
+                "completed": 3,
+                "canceled": 4,
             }
 
             def pr_sort_key(ticket: TicketInfo) -> int:
                 """Sort by PR status: no PR < draft < open < approved < merged."""
                 pr = ticket.pr_info
                 if not pr:
-                    return 0  # No PR
-                if pr.state == "merged":
-                    return 4
-                if pr.state == "closed":
-                    return 5  # Closed without merge (least priority)
+                    return 0
                 if pr.is_draft:
                     return 1
-                if pr.review_decision == ReviewState.APPROVED:
+                if pr.review_decision == "APPROVED":
                     return 3
-                return 2  # Open, awaiting review
+                return 2
 
             self.state.tickets.sort(
                 key=lambda t: (
@@ -451,19 +432,49 @@ class FwtsTUI:
             self.state.status_style = "red"
             self.state.prs = []
 
+    def _build_pr_lookups(
+        self, prs: list[DetailedPRInfo]
+    ) -> tuple[dict[str, DetailedPRInfo], dict[str, DetailedPRInfo]]:
+        """Build lookup dicts from a list of PRs.
+
+        Returns:
+            (branch_lower → PR, ticket_id_upper → PR)
+        """
+        import re
+
+        by_branch: dict[str, DetailedPRInfo] = {}
+        by_ticket: dict[str, DetailedPRInfo] = {}
+        for pr in prs:
+            by_branch[pr.branch.lower()] = pr
+            # Extract ticket ID from branch name (e.g. "sup-1234" from "claudia-sup-1234-foo")
+            match = re.search(r"([a-zA-Z]+-\d+)", pr.branch)
+            if match:
+                by_ticket[match.group(1).upper()] = pr
+            # Fallback: check PR title for ticket ID (covers manual branch names)
+            if not match:
+                title_match = re.search(r"([a-zA-Z]+-\d+)", pr.title)
+                if title_match:
+                    by_ticket.setdefault(title_match.group(1).upper(), pr)
+        return by_branch, by_ticket
+
     async def _load_data(self) -> None:
-        """Load data based on current mode."""
+        """Load data for current mode, with a single bulk PR fetch shared across all views."""
         with self._refresh_lock:
             self.state.loading = True
             self.state.status_message = "Refreshing..."
             self.state.status_style = "yellow"
 
+        # One bulk fetch for all open PRs (includes merge queue data)
+        github_repo = self.config.project.github_repo
+        all_prs = list_prs_detailed(github_repo) if github_repo else []
+        pr_by_branch, pr_by_ticket = self._build_pr_lookups(all_prs)
+
         if self.state.mode == TUIMode.WORKTREES:
-            await self._load_worktree_data()
+            await self._load_worktree_data(pr_by_branch)
         elif self.state.mode == TUIMode.PRS:
             await self._load_pr_data()
         else:
-            await self._load_ticket_data()
+            await self._load_ticket_data(pr_by_branch, pr_by_ticket)
 
         with self._refresh_lock:
             self.state.loading = False
@@ -498,94 +509,6 @@ class FwtsTUI:
             if not r:
                 break
             os.read(fd, 1024)
-
-    def _background_load_tickets(self) -> None:
-        """Load tickets in background thread for faster mode switching."""
-        with contextlib.suppress(Exception):
-            asyncio.run(self._preload_tickets())
-
-    async def _preload_tickets(self) -> None:
-        """Preload tickets without affecting current view."""
-        from fwts.linear import list_my_tickets
-
-        api_key = self.config.linear.api_key
-        github_repo = self.config.project.github_repo
-
-        local_worktrees = self._get_feature_worktrees()
-        local_branches = {wt.branch.lower() for wt in local_worktrees}
-
-        try:
-            raw_tickets = await list_my_tickets(api_key)
-
-            preloaded_tickets = []
-            for t in raw_tickets:
-                has_local = any(
-                    t.identifier.lower() in branch
-                    or (t.branch_name and t.branch_name.lower() == branch)
-                    for branch in local_branches
-                )
-                pr_info = None
-                if github_repo:
-                    with contextlib.suppress(Exception):
-                        if t.branch_name:
-                            pr_info = get_pr_by_branch(t.branch_name, github_repo)
-                        if not pr_info:
-                            pr_info = search_pr_by_ticket(t.identifier, github_repo)
-
-                preloaded_tickets.append(
-                    TicketInfo(
-                        id=t.id,
-                        identifier=t.identifier,
-                        title=t.title,
-                        state=t.state,
-                        state_type=t.state_type,
-                        priority=t.priority,
-                        assignee=t.assignee,
-                        url=t.url,
-                        branch_name=t.branch_name,
-                        has_local_worktree=has_local,
-                        pr_info=pr_info,
-                    )
-                )
-
-            # Sort tickets by status workflow position, then PR status, then priority
-            type_order = {
-                "started": 0,
-                "unstarted": 1,
-                "backlog": 2,
-                "completed": 3,
-                "canceled": 4,
-            }
-
-            def pr_sort_key(ticket: TicketInfo) -> int:
-                """Sort by PR status: no PR < draft < open < approved < merged."""
-                pr = ticket.pr_info
-                if not pr:
-                    return 0
-                if pr.state == "merged":
-                    return 4
-                if pr.state == "closed":
-                    return 5
-                if pr.is_draft:
-                    return 1
-                if pr.review_decision == ReviewState.APPROVED:
-                    return 3
-                return 2
-
-            preloaded_tickets.sort(
-                key=lambda t: (
-                    type_order.get(t.state_type.lower(), 5),
-                    pr_sort_key(t),
-                    -t.priority,
-                )
-            )
-
-            # Only update if user hasn't loaded tickets yet
-            with self._refresh_lock:
-                if not self.state.tickets:
-                    self.state.tickets = preloaded_tickets
-        except Exception:
-            pass  # Silently fail
 
     def _get_current_items(self) -> list:
         """Get current list of items based on mode."""
@@ -711,35 +634,36 @@ class FwtsTUI:
 
         return table
 
-    def _format_pr_display(self, pr: PRInfo | None) -> Text:
-        """Format PR info for display."""
+    def _format_pr_display(self, pr: DetailedPRInfo | None) -> Text:
+        """Format PR info for display, including merge queue status."""
         if not pr:
             return Text("no PR", style="dim")
 
-        # Build status string: state/review #number
-        parts = []
-
-        # State
-        if pr.state == "merged":
-            parts.append(("merged", "magenta"))
-        elif pr.state == "closed":
-            parts.append(("closed", "dim"))
-        elif pr.is_draft:
-            parts.append(("draft", "dim"))
-        else:
-            # Show review status for open PRs
-            if pr.review_decision == ReviewState.APPROVED:
-                parts.append(("approved", "green"))
-            elif pr.review_decision == ReviewState.CHANGES_REQUESTED:
-                parts.append(("changes", "red"))
-            elif pr.review_decision == ReviewState.PENDING:
-                parts.append(("in review", "yellow"))
-            else:
-                parts.append(("open", "yellow"))
-
         text = Text()
-        for part_text, part_style in parts:
-            text.append(part_text, style=part_style)
+
+        # Merge queue takes priority in display
+        if pr.in_merge_queue:
+            mq_state_map = {
+                "QUEUED": "queued",
+                "AWAITING_CHECKS": "mq:chks",
+                "MERGEABLE": "mq:rdy",
+                "UNMERGEABLE": "mq:fail",
+                "LOCKED": "mq:lock",
+            }
+            mq_label = mq_state_map.get(pr.merge_queue_state or "", "queued")
+            if pr.merge_queue_position is not None:
+                mq_label += f"#{pr.merge_queue_position + 1}"
+            text.append(mq_label, style="blue")
+        elif pr.is_draft:
+            text.append("draft", style="dim")
+        else:
+            review_map = {
+                "APPROVED": ("approved", "green"),
+                "CHANGES_REQUESTED": ("changes", "red"),
+                "REVIEW_REQUIRED": ("in review", "yellow"),
+            }
+            label, style = review_map.get(pr.review_decision or "", ("open", "yellow"))
+            text.append(label, style=style)
 
         text.append(f" #{pr.number}", style="cyan")
         return text
@@ -1678,14 +1602,6 @@ class FwtsTUI:
         # Initial data load
         asyncio.run(self._load_data())
 
-        # Start background ticket loading if Linear is enabled
-        if self.config.linear.enabled and self.config.linear.api_key:
-            ticket_thread = threading.Thread(
-                target=self._background_load_tickets,
-                daemon=True,
-            )
-            ticket_thread.start()
-
         action = None
         result_data = None
 
@@ -1835,6 +1751,15 @@ def simple_list(config: Config) -> None:
 
     github_repo = config.project.github_repo
 
+    # Bulk-fetch all open PRs (with merge queue data)
+    pr_by_branch: dict[str, DetailedPRInfo] = {}
+    if github_repo:
+        try:
+            all_prs = list_prs_detailed(github_repo)
+            pr_by_branch = {pr.branch.lower(): pr for pr in all_prs}
+        except Exception:
+            pass
+
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Branch")
     table.add_column("Tmux", width=5)
@@ -1844,24 +1769,22 @@ def simple_list(config: Config) -> None:
         session_name = session_name_from_branch(wt.branch)
         session = "[green]●[/green]" if session_exists(session_name) else "[dim]○[/dim]"
 
-        # Fetch PR info
-        pr_display = "[dim]no PR[/dim]"
-        if github_repo:
-            try:
-                pr = get_pr_by_branch(wt.branch, github_repo)
-                if pr:
-                    if pr.state == "merged":
-                        pr_display = f"[magenta]merged[/magenta] [cyan]#{pr.number}[/cyan]"
-                    elif pr.state == "closed":
-                        pr_display = f"[dim]closed #{pr.number}[/dim]"
-                    elif pr.review_decision == ReviewState.APPROVED:
-                        pr_display = f"[green]approved[/green] [cyan]#{pr.number}[/cyan]"
-                    elif pr.review_decision == ReviewState.CHANGES_REQUESTED:
-                        pr_display = f"[red]changes[/red] [cyan]#{pr.number}[/cyan]"
-                    else:
-                        pr_display = f"[yellow]open[/yellow] [cyan]#{pr.number}[/cyan]"
-            except Exception:
-                pass
+        pr = pr_by_branch.get(wt.branch.lower())
+        if pr and pr.in_merge_queue:
+            mq_label = pr.merge_queue_state or "queued"
+            if pr.merge_queue_position is not None:
+                mq_label += f"#{pr.merge_queue_position + 1}"
+            pr_display = f"[blue]{mq_label}[/blue] [cyan]#{pr.number}[/cyan]"
+        elif pr and pr.is_draft:
+            pr_display = f"[dim]draft[/dim] [cyan]#{pr.number}[/cyan]"
+        elif pr and pr.review_decision == "APPROVED":
+            pr_display = f"[green]approved[/green] [cyan]#{pr.number}[/cyan]"
+        elif pr and pr.review_decision == "CHANGES_REQUESTED":
+            pr_display = f"[red]changes[/red] [cyan]#{pr.number}[/cyan]"
+        elif pr:
+            pr_display = f"[yellow]open[/yellow] [cyan]#{pr.number}[/cyan]"
+        else:
+            pr_display = "[dim]no PR[/dim]"
 
         table.add_row(wt.branch, session, pr_display)
 
