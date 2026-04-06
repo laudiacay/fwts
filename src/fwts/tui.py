@@ -153,8 +153,19 @@ class TUIState:
 
     # Cached Data
     worktrees: list[WorktreeInfo] = field(default_factory=list)
-    tickets: list[TicketInfo] = field(default_factory=list)
     prs: list[PRDisplayInfo] = field(default_factory=list)
+    # Per-mode ticket caches so tab switching is instant
+    _tickets_by_mode: dict = field(default_factory=dict)
+
+    @property
+    def tickets(self) -> list:
+        """Return tickets for the current mode."""
+        return self._tickets_by_mode.get(self.mode, [])
+
+    @tickets.setter
+    def tickets(self, value: list) -> None:
+        """Set tickets for the current mode."""
+        self._tickets_by_mode[self.mode] = value
 
     # Terminal State
     last_terminal_size: tuple[int, int] = (0, 0)
@@ -308,129 +319,103 @@ class FwtsTUI:
         with self._refresh_lock:
             self.state.worktrees = new_worktrees
 
-    async def _load_ticket_data(
-        self, pr_lookup: dict[str, DetailedPRInfo], pr_by_ticket: dict[str, DetailedPRInfo]
-    ) -> None:
-        """Load tickets from Linear based on current mode."""
+    async def _load_ticket_data_for_mode(
+        self,
+        mode: TUIMode,
+        pr_lookup: dict[str, DetailedPRInfo],
+        pr_by_ticket: dict[str, DetailedPRInfo],
+        local_branches: set[str],
+    ) -> list[TicketInfo]:
+        """Load tickets from Linear for a specific mode. Returns the ticket list."""
         from fwts.linear import list_my_tickets, list_review_requests, list_team_tickets
 
         api_key = self.config.linear.api_key
 
-        # Get local worktrees to cross-reference
-        local_worktrees = self._get_feature_worktrees()
-        local_branches = {wt.branch.lower() for wt in local_worktrees}
+        if mode == TUIMode.TICKETS_MINE:
+            raw_tickets = await list_my_tickets(api_key)
+        elif mode == TUIMode.TICKETS_REVIEW:
+            raw_tickets = await list_review_requests(api_key)
+        elif mode == TUIMode.TICKETS_ALL:
+            raw_tickets = await list_team_tickets(api_key)
+        else:
+            return []
 
-        try:
-            if self.state.mode == TUIMode.TICKETS_MINE:
-                raw_tickets = await list_my_tickets(api_key)
-            elif self.state.mode == TUIMode.TICKETS_REVIEW:
-                raw_tickets = await list_review_requests(api_key)
-            elif self.state.mode == TUIMode.TICKETS_ALL:
-                raw_tickets = await list_team_tickets(api_key)
-            else:
-                raw_tickets = []
+        tickets = []
+        for t in raw_tickets:
+            has_local = any(
+                t.identifier.lower() in branch
+                or (t.branch_name and t.branch_name.lower() == branch)
+                for branch in local_branches
+            )
 
-            self.state.tickets = []
-            for t in raw_tickets:
-                has_local = any(
-                    t.identifier.lower() in branch
-                    or (t.branch_name and t.branch_name.lower() == branch)
-                    for branch in local_branches
-                )
+            pr_info = None
+            if t.branch_name:
+                pr_info = pr_lookup.get(t.branch_name.lower())
+            if not pr_info:
+                pr_info = pr_by_ticket.get(t.identifier.upper())
 
-                # Match PR from bulk-fetched data: by branch name, then by ticket ID
-                pr_info = None
-                if t.branch_name:
-                    pr_info = pr_lookup.get(t.branch_name.lower())
-                if not pr_info:
-                    pr_info = pr_by_ticket.get(t.identifier.upper())
-
-                self.state.tickets.append(
-                    TicketInfo(
-                        id=t.id,
-                        identifier=t.identifier,
-                        title=t.title,
-                        state=t.state,
-                        state_type=t.state_type,
-                        priority=t.priority,
-                        assignee=t.assignee,
-                        url=t.url,
-                        branch_name=t.branch_name,
-                        has_local_worktree=has_local,
-                        pr_info=pr_info,
-                    )
-                )
-
-            type_order = {
-                "started": 0,
-                "unstarted": 1,
-                "backlog": 2,
-                "completed": 3,
-                "canceled": 4,
-            }
-
-            def pr_sort_key(ticket: TicketInfo) -> int:
-                """Sort by PR status: no PR < draft < open < approved < merged."""
-                pr = ticket.pr_info
-                if not pr:
-                    return 0
-                if pr.is_draft:
-                    return 1
-                if pr.review_decision == "APPROVED":
-                    return 3
-                return 2
-
-            self.state.tickets.sort(
-                key=lambda t: (
-                    type_order.get(t.state_type.lower(), 5),
-                    pr_sort_key(t),
-                    -t.priority,
+            tickets.append(
+                TicketInfo(
+                    id=t.id,
+                    identifier=t.identifier,
+                    title=t.title,
+                    state=t.state,
+                    state_type=t.state_type,
+                    priority=t.priority,
+                    assignee=t.assignee,
+                    url=t.url,
+                    branch_name=t.branch_name,
+                    has_local_worktree=has_local,
+                    pr_info=pr_info,
                 )
             )
-        except Exception as e:
-            self.state.status_message = f"Failed to load tickets: {e}"
-            self.state.status_style = "red"
-            self.state.tickets = []
 
-    async def _load_pr_data(self) -> None:
-        """Load PR data for the PR dashboard mode."""
-        github_repo = self.config.project.github_repo
-        if not github_repo:
-            self.state.prs = []
-            self.state.status_message = "No github_repo configured"
-            self.state.status_style = "red"
-            return
+        type_order = {
+            "started": 0,
+            "unstarted": 1,
+            "backlog": 2,
+            "completed": 3,
+            "canceled": 4,
+        }
 
-        try:
-            detailed_prs = list_prs_detailed(github_repo)
+        def pr_sort_key(ticket: TicketInfo) -> int:
+            pr = ticket.pr_info
+            if not pr:
+                return 0
+            if pr.is_draft:
+                return 1
+            if pr.review_decision == "APPROVED":
+                return 3
+            return 2
 
-            # Cross-reference with local worktrees
-            local_worktrees = self._get_feature_worktrees()
-            local_branches = {wt.branch.lower(): wt.branch for wt in local_worktrees}
+        tickets.sort(
+            key=lambda t: (
+                type_order.get(t.state_type.lower(), 5),
+                pr_sort_key(t),
+                -t.priority,
+            )
+        )
+        return tickets
 
-            pr_display_list = []
-            for pr in detailed_prs:
-                branch_lower = pr.branch.lower()
-                has_local = branch_lower in local_branches
-                worktree_branch = local_branches.get(branch_lower)
-                pr_display_list.append(
-                    PRDisplayInfo(
-                        pr=pr,
-                        has_local_worktree=has_local,
-                        worktree_branch=worktree_branch,
-                    )
+    def _build_pr_display_list(
+        self, all_prs: list[DetailedPRInfo], local_branches: dict[str, str]
+    ) -> list[PRDisplayInfo]:
+        """Build the PR display list from bulk-fetched PRs."""
+        pr_display_list = []
+        for pr in all_prs:
+            branch_lower = pr.branch.lower()
+            has_local = branch_lower in local_branches
+            worktree_branch = local_branches.get(branch_lower)
+            pr_display_list.append(
+                PRDisplayInfo(
+                    pr=pr,
+                    has_local_worktree=has_local,
+                    worktree_branch=worktree_branch,
                 )
+            )
 
-            # Sort: needs-your-review first, then by updatedAt (already sorted)
-            pr_display_list.sort(key=lambda p: (not p.pr.needs_your_review,))
-
-            with self._refresh_lock:
-                self.state.prs = list(pr_display_list)
-
-        except Exception as e:
-            self.state.status_message = f"Failed to load PRs: {e}"
-            self.state.status_style = "red"
-            self.state.prs = []
+        pr_display_list.sort(key=lambda p: (not p.pr.needs_your_review,))
+        return pr_display_list
 
     def _build_pr_lookups(
         self, prs: list[DetailedPRInfo]
@@ -458,7 +443,7 @@ class FwtsTUI:
         return by_branch, by_ticket
 
     async def _load_data(self) -> None:
-        """Load data for current mode, with a single bulk PR fetch shared across all views."""
+        """Load all views' data in one pass so tab switching is instant."""
         with self._refresh_lock:
             self.state.loading = True
             self.state.status_message = "Refreshing..."
@@ -469,12 +454,36 @@ class FwtsTUI:
         all_prs = list_prs_detailed(github_repo) if github_repo else []
         pr_by_branch, pr_by_ticket = self._build_pr_lookups(all_prs)
 
-        if self.state.mode == TUIMode.WORKTREES:
-            await self._load_worktree_data(pr_by_branch)
-        elif self.state.mode == TUIMode.PRS:
-            await self._load_pr_data()
-        else:
-            await self._load_ticket_data(pr_by_branch, pr_by_ticket)
+        # Local worktrees (needed by multiple views)
+        local_worktrees = self._get_feature_worktrees()
+        local_branches_set = {wt.branch.lower() for wt in local_worktrees}
+        local_branches_map = {wt.branch.lower(): wt.branch for wt in local_worktrees}
+
+        # Load worktrees + PR display list (both fast, in-memory after bulk fetch)
+        await self._load_worktree_data(pr_by_branch)
+
+        with self._refresh_lock:
+            self.state.prs = self._build_pr_display_list(all_prs, local_branches_map)
+
+        # Load all 3 ticket modes concurrently
+        if self.config.linear.enabled and self.config.linear.api_key:
+            ticket_modes = [TUIMode.TICKETS_MINE, TUIMode.TICKETS_REVIEW, TUIMode.TICKETS_ALL]
+            results = await asyncio.gather(
+                *(
+                    self._load_ticket_data_for_mode(
+                        mode, pr_by_branch, pr_by_ticket, local_branches_set
+                    )
+                    for mode in ticket_modes
+                ),
+                return_exceptions=True,
+            )
+            with self._refresh_lock:
+                for mode, result in zip(ticket_modes, results, strict=True):
+                    if isinstance(result, Exception):
+                        _tui_log(f"Failed to load {mode.value}: {result}")
+                        self.state._tickets_by_mode[mode] = []
+                    else:
+                        self.state._tickets_by_mode[mode] = result
 
         with self._refresh_lock:
             self.state.loading = False
@@ -1105,13 +1114,12 @@ class FwtsTUI:
             _rearm_cbreak()
 
     def _switch_mode(self, new_mode: TUIMode) -> None:
-        """Switch to a new mode."""
+        """Switch to a new mode. Data is already cached — no refresh needed."""
         if new_mode != self.state.mode:
             self.state.mode = new_mode
             self.state.cursor = 0
             self.state.viewport_start = 0
             self.state.selected.clear()
-            self.state.needs_refresh = True
 
     def _cycle_mode(self) -> None:
         """Cycle through modes."""
