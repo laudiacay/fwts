@@ -152,6 +152,10 @@ def start(
         str | None,
         typer.Option("--base", "-b", help="Base branch to create from"),
     ] = None,
+    no_session: Annotated[
+        bool,
+        typer.Option("--no-session", help="Skip tmux, docker, and lifecycle commands"),
+    ] = False,
     project: ProjectOption = None,
     config_path: ConfigOption = None,
 ) -> None:
@@ -159,6 +163,7 @@ def start(
 
     Creates a new worktree if needed, sets up tmux session, and attaches.
     If the branch already exists, attaches to existing session.
+    Use --no-session for headless/agent use (skips tmux, docker, on_start).
     """
     config = _get_config(project, config_path)
 
@@ -208,7 +213,9 @@ def start(
         # Use the actual branch name from the existing worktree
         actual_branch = existing.branch
         session_name = session_name_from_branch(actual_branch)
-        if session_exists(session_name):
+        if no_session:
+            console.print(f"[green]Worktree exists at {existing.path}[/green]")
+        elif session_exists(session_name):
             console.print(f"[blue]Attaching to existing session: {session_name}[/blue]")
             attach_session(session_name)
         else:
@@ -218,9 +225,17 @@ def start(
                 base,
                 ticket_info=ticket_info,
                 display_name=display_name,
+                no_session=no_session,
             )
     else:
-        full_setup(branch, config, base, ticket_info=ticket_info, display_name=display_name)
+        full_setup(
+            branch,
+            config,
+            base,
+            ticket_info=ticket_info,
+            display_name=display_name,
+            no_session=no_session,
+        )
 
 
 @app.command()

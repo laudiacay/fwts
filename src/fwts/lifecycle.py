@@ -125,6 +125,7 @@ def full_setup(
     base_branch: str | None = None,
     ticket_info: str = "",
     display_name: str = "",
+    no_session: bool = False,
 ) -> Path:
     """Complete setup for a new or existing feature branch.
 
@@ -137,6 +138,7 @@ def full_setup(
         ticket_info: Optional ticket info to pass to Claude initialization
         display_name: Human-readable name for tmux window title (e.g. ticket title).
                       Falls back to branch-derived session name if empty.
+        no_session: If True, skip tmux, docker, and lifecycle commands (headless mode)
 
     Returns:
         Path to the worktree
@@ -218,6 +220,10 @@ def full_setup(
                     console.print("  [yellow]Could not create draft PR[/yellow]")
         except Exception as e:
             console.print(f"  [yellow]Push/PR failed: {e}[/yellow]")
+
+    if no_session:
+        console.print(f"[green]Worktree ready at {worktree_path}[/green]")
+        return worktree_path
 
     # Create or attach to tmux session
     if session_exists(session_name):
