@@ -10,20 +10,23 @@ You are an orchestrator coordinating work across multiple git worktrees managed 
 
 ## Step 1: Gather State
 
-Call all three fwts MCP tools in parallel to get the full picture. If the user specified a project, pass it; otherwise auto-detect.
+Call `fwts_actionable` first for the prioritized inbox, then gather full context in parallel. If the user specified a project, pass it; otherwise auto-detect.
 
+- `fwts_actionable(project=...)` — prioritized triage: CI failures, conflicts, rebases, reviews, merge-queue-ready
 - `fwts_worktrees(project=...)` — worktree paths, tmux sessions, PR status
-- `fwts_prs(project=...)` — all open PRs with CI, review, merge queue detail
 - `fwts_tickets(mode="mine", project=...)` — current user's tickets
+
+For PRs with CI failures, also call `fwts_ci_failures(project=...)` to get specific check names and run IDs.
+For PRs with review comments, call `fwts_review_comments(pr_number=..., project=...)` to get the actual feedback.
 
 ## Step 2: Present Actionable Summary
 
-Analyze the data and present a concise table to the user organized by urgency:
+Present the `fwts_actionable` results as a concise table organized by urgency:
 
 **Needs immediate attention:**
-- PRs with CI failures (ci_summary contains "fail")
-- PRs that are BEHIND or CONFLICTING (merge_state_status)
-- PRs with CHANGES_REQUESTED review decision
+- PRs with CI failures — show which checks failed
+- PRs with merge conflicts
+- PRs with CHANGES_REQUESTED — summarize the review comments
 
 **Ready to advance:**
 - PRs with CI passing + approved — candidates for merge queue
@@ -34,7 +37,7 @@ Analyze the data and present a concise table to the user organized by urgency:
 - Tickets in "started" state without PRs
 
 **Idle/stale:**
-- Worktrees for completed tickets (can be cleaned up)
+- Worktrees for completed/cancelled tickets (can be cleaned up)
 - PRs with no activity in >7 days
 
 ## Step 3: Take Direction
@@ -43,10 +46,14 @@ Ask the user what they want to dispatch. Examples:
 - "Fix CI on SUP-2608 and rebase SUP-2397"
 - "Push everything that's green to merge queue"
 - "Clean up all done worktrees"
+- "Address review comments on #3350"
 
 ## Step 4: Dispatch Workers
 
 For each task, spawn a background Agent with a self-contained prompt. Workers cannot ask follow-up questions, so front-load all context.
+
+### Creating new worktrees for agents:
+Use `fwts start <ticket-or-branch> --no-session` to create worktrees headlessly (skips tmux, docker, lifecycle commands). This is fast and non-blocking.
 
 ### Worker prompt template:
 
@@ -76,16 +83,22 @@ NEXT_STEPS: <any blockers or follow-up>
 ### Dispatch rules:
 - Use `run_in_background: true` for all agents so they run in parallel
 - Set the agent's working directory by instructing it to `cd {worktree_path}` at the start
-- For CI fixes: use `subagent_type: "task-executor"`
+- For CI fixes: use `subagent_type: "task-executor"`, include the failed check names and suggest using `gh run view <run_id> --log-failed` to get logs
+- For review comment fixes: use `subagent_type: "task-executor"`, include the full review comment text in the prompt
 - For investigation: use `subagent_type: "code-investigator"`
+- For architecture/design: use `subagent_type: "feature-dev:code-architect"`
 - Independent tasks should be dispatched in parallel (single message, multiple Agent calls)
 - Dependent tasks (rebase A then rebase B on top of A) must be sequential
+- Use `mode: "auto"` for agents that need to edit files in worktrees outside the current project directory
+
+### Permission note:
+Agents dispatched into worktrees outside the current project directory may hit Edit/Bash permission denials. If this happens, make the edits directly from the orchestrator session instead.
 
 ## Step 5: Monitor and Report
 
 After workers complete:
 1. Parse each worker's RESULT/PUSHED/SUMMARY from the Agent return value
-2. Call `fwts_prs(project=...)` again to verify the state changed as expected
+2. Call `fwts_actionable(project=...)` again to verify the state changed as expected
 3. Report outcomes to the user in a summary table
 4. If any workers failed, present the failure reason and ask how to proceed
 
@@ -104,6 +117,7 @@ Based on results, suggest next steps:
 - If rebase conflicts: "Conflicts in {files} — want me to send an agent to resolve?"
 
 Use `gh pr merge --merge-queue` via Bash for merge queue operations.
+Use `gh pr edit --add-reviewer <user>` to request reviews.
 
 ## Important Constraints
 
@@ -112,3 +126,4 @@ Use `gh pr merge --merge-queue` via Bash for merge queue operations.
 - Always verify outcomes via fwts MCP after workers complete; don't trust worker self-reports alone
 - Never dispatch two workers to the same worktree simultaneously
 - The fwts MCP is read-only — mutations require gh CLI or git commands via Bash
+- Use `fwts start --no-session` for creating worktrees headlessly, not raw `git worktree add`
