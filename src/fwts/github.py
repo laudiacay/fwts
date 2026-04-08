@@ -698,6 +698,49 @@ def get_failed_run_ids(pr_number: int, repo: str) -> list[dict]:
     return results
 
 
+@dataclass
+class ClosedPRRef:
+    """Lightweight reference to a merged or closed PR."""
+
+    number: int
+    state: str  # "merged" or "closed"
+
+
+def list_closed_pr_refs(repo: str, limit: int = 200) -> dict[str, ClosedPRRef]:
+    """Bulk-fetch recently merged and closed PRs, returning branch_lower → ClosedPRRef.
+
+    Lightweight alternative to list_prs_detailed for detecting stale worktrees.
+    Two gh calls (merged + closed) but only fetches minimal fields.
+    """
+    result_map: dict[str, ClosedPRRef] = {}
+    for gh_state, label in [("merged", "merged"), ("closed", "closed")]:
+        args = [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            gh_state,
+            "--json",
+            "headRefName,number",
+            "--limit",
+            str(limit),
+        ]
+        gh_result = _run_gh(args, check=False)
+        if gh_result.returncode != 0:
+            continue
+        try:
+            data = json.loads(gh_result.stdout)
+        except json.JSONDecodeError:
+            continue
+        for pr in data:
+            key = pr["headRefName"].lower()
+            # merged takes precedence over closed (a PR can appear in both)
+            if key not in result_map or label == "merged":
+                result_map[key] = ClosedPRRef(number=pr["number"], state=label)
+    return result_map
+
+
 def get_ci_status(branch: str, repo: str | None = None) -> str:
     """Get CI status for a branch.
 

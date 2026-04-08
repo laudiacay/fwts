@@ -8,7 +8,13 @@ from mcp.server.fastmcp import FastMCP
 
 from fwts.config import load_config
 from fwts.git import Worktree, list_worktrees
-from fwts.github import DetailedPRInfo, get_failed_run_ids, get_review_comments, list_prs_detailed
+from fwts.github import (
+    DetailedPRInfo,
+    get_failed_run_ids,
+    get_review_comments,
+    list_closed_pr_refs,
+    list_prs_detailed,
+)
 from fwts.tmux import session_exists, session_name_from_branch
 
 server = FastMCP(
@@ -113,16 +119,25 @@ def fwts_worktrees(project: str | None = None) -> list[dict]:
     all_prs = list_prs_detailed(github_repo) if github_repo else []
     pr_by_branch, _ = _build_pr_lookups(all_prs)
 
+    # For unmatched worktrees, check if their PR was merged or closed
+    closed_by_branch = {}
+    unmatched = {wt.branch.lower() for wt in worktrees} - set(pr_by_branch.keys())
+    if unmatched and github_repo:
+        closed_by_branch = list_closed_pr_refs(github_repo)
+
     results = []
     for wt in worktrees:
         session_name = session_name_from_branch(wt.branch)
-        pr = pr_by_branch.get(wt.branch.lower())
+        branch_lower = wt.branch.lower()
+        pr = pr_by_branch.get(branch_lower)
+        closed = None if pr else closed_by_branch.get(branch_lower)
 
         entry: dict = {
             "branch": wt.branch,
             "path": str(wt.path),
             "tmux_active": session_exists(session_name),
             "pr": _pr_to_dict(pr) if pr else None,
+            "closed_pr": {"number": closed.number, "state": closed.state} if closed else None,
         }
         results.append(entry)
 

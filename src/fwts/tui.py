@@ -25,7 +25,9 @@ from rich.text import Text
 from fwts.config import Config
 from fwts.git import Worktree, list_worktrees
 from fwts.github import (
+    ClosedPRRef,
     DetailedPRInfo,
+    list_closed_pr_refs,
     list_prs_detailed,
 )
 from fwts.hooks import HookResult, get_builtin_hooks, run_all_hooks
@@ -196,6 +198,7 @@ class WorktreeInfo:
     docker_status: str | None = None
     hook_data: dict[str, HookResult] = field(default_factory=dict)
     pr_info: DetailedPRInfo | None = None
+    closed_pr: ClosedPRRef | None = None
 
     @property
     def pr_url(self) -> str | None:
@@ -260,7 +263,11 @@ class FwtsTUI:
             if not wt.is_bare and wt.branch != self.config.project.base_branch
         ]
 
-    async def _load_worktree_data(self, pr_lookup: dict[str, DetailedPRInfo]) -> None:
+    async def _load_worktree_data(
+        self,
+        pr_lookup: dict[str, DetailedPRInfo],
+        closed_lookup: dict[str, ClosedPRRef] | None = None,
+    ) -> None:
         """Load worktree data and run hooks."""
         worktrees = self._get_feature_worktrees()
 
@@ -268,10 +275,14 @@ class FwtsTUI:
         new_worktrees = []
         for wt in worktrees:
             session_name = session_name_from_branch(wt.branch)
+            branch_lower = wt.branch.lower()
+            pr = pr_lookup.get(branch_lower)
+            closed = None if pr else (closed_lookup or {}).get(branch_lower)
             info = WorktreeInfo(
                 worktree=wt,
                 session_active=session_exists(session_name),
-                pr_info=pr_lookup.get(wt.branch.lower()),
+                pr_info=pr,
+                closed_pr=closed,
             )
 
             new_worktrees.append(info)
@@ -459,8 +470,14 @@ class FwtsTUI:
         local_branches_set = {wt.branch.lower() for wt in local_worktrees}
         local_branches_map = {wt.branch.lower(): wt.branch for wt in local_worktrees}
 
+        # For worktrees with no open PR, check if their PR was merged or closed
+        closed_lookup: dict[str, ClosedPRRef] = {}
+        unmatched = local_branches_set - set(pr_by_branch.keys())
+        if unmatched and github_repo:
+            closed_lookup = list_closed_pr_refs(github_repo)
+
         # Load worktrees + PR display list (both fast, in-memory after bulk fetch)
-        await self._load_worktree_data(pr_by_branch)
+        await self._load_worktree_data(pr_by_branch, closed_lookup)
 
         with self._refresh_lock:
             self.state.prs = self._build_pr_display_list(all_prs, local_branches_map)
@@ -629,7 +646,7 @@ class FwtsTUI:
                     hook_values.append(Text("-", style="dim"))
 
             # PR display - show state and number combined
-            pr_display = self._format_pr_display(info.pr_info)
+            pr_display = self._format_pr_display(info.pr_info, info.closed_pr)
 
             # Highlight row if at cursor
             style = "reverse" if idx == self.state.cursor else None
@@ -643,9 +660,17 @@ class FwtsTUI:
 
         return table
 
-    def _format_pr_display(self, pr: DetailedPRInfo | None) -> Text:
-        """Format PR info for display, including merge queue status."""
+    def _format_pr_display(
+        self, pr: DetailedPRInfo | None, closed_pr: ClosedPRRef | None = None
+    ) -> Text:
+        """Format PR info for display, including merge queue, merged, and closed status."""
         if not pr:
+            if closed_pr:
+                style = "green dim" if closed_pr.state == "merged" else "red dim"
+                text = Text()
+                text.append(closed_pr.state, style=style)
+                text.append(f" #{closed_pr.number}", style="cyan dim")
+                return text
             return Text("no PR", style="dim")
 
         text = Text()
@@ -1761,12 +1786,18 @@ def simple_list(config: Config) -> None:
 
     # Bulk-fetch all open PRs (with merge queue data)
     pr_by_branch: dict[str, DetailedPRInfo] = {}
+    closed_by_branch: dict[str, ClosedPRRef] = {}
     if github_repo:
         try:
             all_prs = list_prs_detailed(github_repo)
             pr_by_branch = {pr.branch.lower(): pr for pr in all_prs}
         except Exception:
             pass
+
+        # For unmatched worktrees, check if their PR was merged or closed
+        unmatched = {wt.branch.lower() for wt in feature_worktrees} - set(pr_by_branch.keys())
+        if unmatched:
+            closed_by_branch = list_closed_pr_refs(github_repo)
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Branch")
@@ -1777,7 +1808,8 @@ def simple_list(config: Config) -> None:
         session_name = session_name_from_branch(wt.branch)
         session = "[green]●[/green]" if session_exists(session_name) else "[dim]○[/dim]"
 
-        pr = pr_by_branch.get(wt.branch.lower())
+        branch_lower = wt.branch.lower()
+        pr = pr_by_branch.get(branch_lower)
         if pr and pr.in_merge_queue:
             mq_label = pr.merge_queue_state or "queued"
             if pr.merge_queue_position is not None:
@@ -1791,6 +1823,9 @@ def simple_list(config: Config) -> None:
             pr_display = f"[red]changes[/red] [cyan]#{pr.number}[/cyan]"
         elif pr:
             pr_display = f"[yellow]open[/yellow] [cyan]#{pr.number}[/cyan]"
+        elif closed := closed_by_branch.get(branch_lower):
+            style = "green dim" if closed.state == "merged" else "red dim"
+            pr_display = f"[{style}]{closed.state}[/{style}] [cyan dim]#{closed.number}[/cyan dim]"
         else:
             pr_display = "[dim]no PR[/dim]"
 
