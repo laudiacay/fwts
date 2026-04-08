@@ -718,6 +718,8 @@ class FwtsTUI:
             text.append(label, style=style)
 
         text.append(f" #{pr.number}", style="cyan")
+        if pr.auto_merge_enabled:
+            text.append(" ⚡", style="magenta")
         return text
 
     @staticmethod
@@ -1830,6 +1832,7 @@ def simple_list(config: Config) -> None:
 
         branch_lower = wt.branch.lower()
         pr = pr_by_branch.get(branch_lower)
+        pr_display = "[dim]no PR[/dim]"
         if pr and pr.in_merge_queue:
             mq_label = pr.merge_queue_state or "queued"
             if pr.merge_queue_position is not None:
@@ -1846,8 +1849,9 @@ def simple_list(config: Config) -> None:
         elif closed := closed_by_branch.get(branch_lower):
             style = "green dim" if closed.state == "merged" else "red dim"
             pr_display = f"[{style}]{closed.state}[/{style}] [cyan dim]#{closed.number}[/cyan dim]"
-        else:
-            pr_display = "[dim]no PR[/dim]"
+
+        if pr and pr.auto_merge_enabled:
+            pr_display += " [magenta]⚡[/magenta]"
 
         table.add_row(wt.branch, session, pr_display)
 

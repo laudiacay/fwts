@@ -78,6 +78,8 @@ class DetailedPRInfo:
     labels: list[str] = field(default_factory=list)
     status_checks: list[StatusCheck] = field(default_factory=list)
     review_requestees: list[str] = field(default_factory=list)
+    # Auto-merge ("merge when ready")
+    auto_merge_enabled: bool = False
     # Merge queue fields - populated via GraphQL
     in_merge_queue: bool = False
     merge_queue_state: str | None = None  # QUEUED, AWAITING_CHECKS, MERGEABLE, UNMERGEABLE, LOCKED
@@ -217,7 +219,7 @@ def list_prs_detailed(repo: str | None = None) -> list[DetailedPRInfo]:
     fields = (
         "number,title,headRefName,baseRefName,author,labels,isDraft,"
         "reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,"
-        "updatedAt,reviewRequests,additions,deletions,url"
+        "updatedAt,reviewRequests,additions,deletions,url,autoMergeRequest"
     )
     args = ["pr", "list", "--state", "open", "--json", fields, "--limit", "100"]
     if repo:
@@ -289,6 +291,7 @@ def list_prs_detailed(repo: str | None = None) -> list[DetailedPRInfo]:
             labels=labels,
             status_checks=checks,
             review_requestees=requestees,
+            auto_merge_enabled=data.get("autoMergeRequest") is not None,
         )
         pr._current_username = username
         prs.append(pr)

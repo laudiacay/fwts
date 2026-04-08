@@ -75,6 +75,7 @@ def _pr_to_dict(pr: DetailedPRInfo) -> dict:
         "merge_state_status": pr.merge_state_status,
         "ci_summary": pr.ci_summary,
         "labels": pr.labels,
+        "auto_merge_enabled": pr.auto_merge_enabled,
         "in_merge_queue": pr.in_merge_queue,
         "merge_queue_state": pr.merge_queue_state,
         "merge_queue_position": pr.merge_queue_position,
