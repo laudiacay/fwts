@@ -252,39 +252,36 @@ def get_builtin_hooks() -> list[ColumnHook]:
         # Note: PR status is now handled inline in the TUI, not as a hook
         ColumnHook(
             name="Claude",
-            # Check Claude status via status file (written by Claude Code hooks)
-            # Falls back to tmux session detection
-            # Output: "typing", "waiting", "idle", "off"
+            # Status file written by Claude Code hooks (Stop → needs_input, UserPromptSubmit → busy)
+            # Falls back to process detection if no status file
             hook=r"""
-                # Convert branch name to session name (replace / and . with -)
                 session=$(echo "$BRANCH_NAME" | tr '/.' '-')
-
-                # Check status file first (written by Claude Code Stop/UserPromptSubmit hooks)
                 status_file="/tmp/fwts-claude-$session"
+
+                # Status file is authoritative when present
                 if [ -f "$status_file" ]; then
                     cat "$status_file"
                     exit 0
                 fi
 
-                # Fallback: check if tmux session exists with claude running
+                # Fallback: check if claude process is running in tmux
                 if ! tmux has-session -t "$session" 2>/dev/null; then
                     echo "off"
                     exit 0
                 fi
 
-                # Check if any pane is running claude
                 for line in $(tmux list-panes -t "$session" -F '#{pane_index}:#{pane_pid}' 2>/dev/null); do
                     pid="${line#*:}"
                     if pgrep -P "$pid" -f "claude" >/dev/null 2>&1; then
-                        echo "typing"
+                        echo "busy"
                         exit 0
                     fi
                 done
                 echo "idle"
             """,
             color_map={
-                "typing": "green",
-                "waiting": "yellow",
+                "needs_input": "yellow",
+                "busy": "green",
                 "idle": "dim",
                 "off": "dim",
             },
