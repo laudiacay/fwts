@@ -453,6 +453,24 @@ class FwtsTUI:
                     by_ticket.setdefault(title_match.group(1).upper(), pr)
         return by_branch, by_ticket
 
+    def _load_local_worktrees(self) -> None:
+        """Populate worktree list from git (fast, local-only).
+
+        This gives the user an interactable list immediately while network
+        data (PRs, tickets, hooks) loads in the background.
+        """
+        worktrees = self._get_feature_worktrees()
+        new_worktrees = []
+        for wt in worktrees:
+            session_name = session_name_from_branch(wt.branch)
+            info = WorktreeInfo(
+                worktree=wt,
+                session_active=session_exists(session_name),
+            )
+            new_worktrees.append(info)
+        with self._refresh_lock:
+            self.state.worktrees = new_worktrees
+
     async def _load_data(self) -> None:
         """Load all views' data in one pass so tab switching is instant."""
         with self._refresh_lock:
@@ -476,7 +494,7 @@ class FwtsTUI:
         if unmatched and github_repo:
             closed_lookup = list_closed_pr_refs(github_repo)
 
-        # Load worktrees + PR display list (both fast, in-memory after bulk fetch)
+        # Enrich worktrees with PR data + hooks
         await self._load_worktree_data(pr_by_branch, closed_lookup)
 
         with self._refresh_lock:
@@ -1632,8 +1650,10 @@ class FwtsTUI:
         # Show cute startup message
         console.print(f"[dim italic]{get_startup_message()}[/dim italic]")
 
-        # Initial data load
-        asyncio.run(self._load_data())
+        # Fast local-only load so worktrees are interactable immediately,
+        # then kick off background refresh for PR data, hooks, and tickets.
+        self._load_local_worktrees()
+        self._start_background_refresh()
 
         action = None
         result_data = None
