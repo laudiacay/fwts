@@ -834,9 +834,8 @@ class FwtsTUI:
         table.add_column("Author", width=12)
         table.add_column("Title", ratio=1)
         table.add_column("Labels", width=15)
-        table.add_column("CI", width=6)
         table.add_column("Review", width=8)
-        table.add_column("Merge", width=8)
+        table.add_column("Merge", width=12)
         table.add_column("+/-", width=10)
         table.add_column("Age", width=4)
         table.add_column("W", width=1)
@@ -844,12 +843,10 @@ class FwtsTUI:
         if not self.state.prs:
             if self.state.loading:
                 table.add_row(
-                    "", "", "", "[yellow]⟳ Loading PRs...[/yellow]", "", "", "", "", "", "", ""
+                    "", "", "", "[yellow]⟳ Loading PRs...[/yellow]", "", "", "", "", "", ""
                 )
             else:
-                table.add_row(
-                    "", "", "", "[dim]No open PRs found[/dim]", "", "", "", "", "", "", ""
-                )
+                table.add_row("", "", "", "[dim]No open PRs found[/dim]", "", "", "", "", "", "")
             return table
 
         viewport_end = min(self.state.viewport_start + self.viewport_size, len(self.state.prs))
@@ -880,11 +877,6 @@ class FwtsTUI:
                 label_parts.append(short)
             labels_text = " ".join(label_parts) if label_parts else ""
 
-            # CI status
-            ci = pr.ci_summary
-            ci_style = {"pass": "green", "none": "dim"}.get(ci, "red" if "fail" in ci else "yellow")
-            ci_text = Text(ci, style=ci_style)
-
             # Review decision
             review_map = {
                 "APPROVED": ("apprvd", "green"),
@@ -894,15 +886,7 @@ class FwtsTUI:
             review_label, review_style = review_map.get(pr.review_decision or "", ("—", "dim"))
             review_text = Text(review_label, style=review_style)
 
-            # Merge state
-            merge_map = {
-                "CLEAN": ("ready", "green"),
-                "DIRTY": ("conflict", "red"),
-                "BLOCKED": ("blocked", "yellow"),
-                "BEHIND": ("behind", "yellow"),
-                "UNSTABLE": ("unstable", "yellow"),
-                "HAS_HOOKS": ("hooks", "yellow"),
-            }
+            # Merge state (with blocked reason)
             if pr.in_merge_queue:
                 mq_state_map = {
                     "QUEUED": "queued",
@@ -915,8 +899,23 @@ class FwtsTUI:
                 if pr.merge_queue_position is not None:
                     mq_label += f"#{pr.merge_queue_position + 1}"
                 merge_label, merge_style = mq_label, "blue"
+            elif pr.merge_state_status == "BLOCKED":
+                merge_label = f"blk:{pr.blocked_reason}"
+                merge_style = (
+                    "red"
+                    if "ci" in pr.blocked_reason and "?" not in pr.blocked_reason
+                    else "yellow"
+                )
+            elif pr.merge_state_status == "DIRTY":
+                merge_label, merge_style = "conflict", "red"
+            elif pr.merge_state_status == "CLEAN":
+                merge_label, merge_style = "ready", "green"
+            elif pr.merge_state_status == "BEHIND":
+                merge_label, merge_style = "behind", "yellow"
+            elif pr.merge_state_status == "UNSTABLE":
+                merge_label, merge_style = "unstable", "yellow"
             else:
-                merge_label, merge_style = merge_map.get(pr.merge_state_status, ("—", "dim"))
+                merge_label, merge_style = "—", "dim"
             merge_text = Text(merge_label, style=merge_style)
 
             # Additions/deletions
@@ -938,7 +937,6 @@ class FwtsTUI:
                 author,
                 Text(title, style=title_style),
                 labels_text,
-                ci_text,
                 review_text,
                 merge_text,
                 diff_text,

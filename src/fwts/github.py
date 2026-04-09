@@ -86,18 +86,42 @@ class DetailedPRInfo:
     merge_queue_position: int | None = None
 
     @property
+    def _actionable_checks(self) -> list[StatusCheck]:
+        """Filter out skipped/neutral checks that don't affect merge status."""
+        skip = ("skipped", "neutral", "stale")
+        return [c for c in self.status_checks if c.conclusion not in skip]
+
+    @property
     def ci_summary(self) -> str:
         """Summarize CI status: 'pass', 'fail', 'pend', 'none'."""
-        if not self.status_checks:
+        checks = self._actionable_checks
+        if not checks:
             return "none"
         fail_conclusions = ("failure", "timed_out", "action_required")
-        failed = [c for c in self.status_checks if c.conclusion in fail_conclusions]
-        pending = [c for c in self.status_checks if c.status != "completed"]
+        failed = [c for c in checks if c.conclusion in fail_conclusions]
+        pending = [c for c in checks if c.status != "completed" and c.conclusion is None]
         if failed:
             return f"{len(failed)}fail"
         if pending:
             return "pend"
         return "pass"
+
+    @property
+    def blocked_reason(self) -> str:
+        """When merge is blocked, return short reason like 'ci', 'rev', 'ci+rev'."""
+        reasons: list[str] = []
+        ci = self.ci_summary
+        if "fail" in ci:
+            reasons.append("ci")
+        elif ci == "pend":
+            reasons.append("ci?")
+        if self.review_decision == "CHANGES_REQUESTED":
+            reasons.append("rev")
+        elif self.review_decision in ("REVIEW_REQUIRED", None):
+            reasons.append("rev?")
+        if self.mergeable == "CONFLICTING":
+            reasons.append("cnfl")
+        return "+".join(reasons) if reasons else "rules"
 
     @property
     def needs_your_review(self) -> bool:
