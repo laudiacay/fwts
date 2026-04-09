@@ -467,6 +467,17 @@ class FwtsTUI:
             }
             self.state.prs = self._build_pr_display_list(cached_prs, local_branches_map)
 
+        # Hydrate worktree rows with cached PR data so the worktree tab
+        # doesn't show "no PR" while the background refresh is in progress.
+        if cached_prs:
+            pr_by_branch, _ = self._build_pr_lookups(cached_prs)
+            with self._refresh_lock:
+                for info in self.state.worktrees:
+                    branch_lower = info.worktree.branch.lower()
+                    pr = pr_by_branch.get(branch_lower)
+                    if pr:
+                        info.pr_info = pr
+
         for mode in (TUIMode.TICKETS_MINE, TUIMode.TICKETS_REVIEW, TUIMode.TICKETS_ALL):
             cached_tickets = self._cache.load_tickets(mode.value)
             if cached_tickets:
@@ -529,7 +540,7 @@ class FwtsTUI:
         # One bulk fetch for all open PRs (includes merge queue data)
         github_repo = self.config.project.github_repo
         all_prs = list_prs_detailed(github_repo) if github_repo else []
-        if all_prs:
+        if github_repo:
             self._cache.save_prs(all_prs)
         pr_by_branch, pr_by_ticket = self._build_pr_lookups(all_prs)
 
