@@ -22,6 +22,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from fwts.cache import TUICache
 from fwts.config import Config
 from fwts.git import Worktree, list_worktrees
 from fwts.github import (
@@ -244,6 +245,7 @@ class FwtsTUI:
         self._pending_docker_up = False
         self._cleanup_func: Callable[..., None] | None = None
         self._startup_mtime = _get_package_mtime()
+        self._cache = TUICache(config.project.github_repo or "default")
 
     @property
     def viewport_size(self) -> int:
@@ -351,6 +353,9 @@ class FwtsTUI:
         else:
             return []
 
+        if raw_tickets:
+            self._cache.save_tickets(mode.value, raw_tickets)
+
         tickets = []
         for t in raw_tickets:
             has_local = any(
@@ -453,6 +458,49 @@ class FwtsTUI:
                     by_ticket.setdefault(title_match.group(1).upper(), pr)
         return by_branch, by_ticket
 
+    def _load_from_cache(self) -> None:
+        """Pre-populate PRs and tickets from disk cache for instant display."""
+        cached_prs = self._cache.load_prs()
+        if cached_prs:
+            local_branches_map = {
+                wt.branch.lower(): wt.branch for wt in self._get_feature_worktrees()
+            }
+            self.state.prs = self._build_pr_display_list(cached_prs, local_branches_map)
+
+        for mode in (TUIMode.TICKETS_MINE, TUIMode.TICKETS_REVIEW, TUIMode.TICKETS_ALL):
+            cached_tickets = self._cache.load_tickets(mode.value)
+            if cached_tickets:
+                pr_by_branch, pr_by_ticket = self._build_pr_lookups(cached_prs)
+                local_branches = {wt.branch.lower() for wt in self._get_feature_worktrees()}
+                tickets = []
+                for t in cached_tickets:
+                    has_local = any(
+                        t.identifier.lower() in branch
+                        or (t.branch_name and t.branch_name.lower() == branch)
+                        for branch in local_branches
+                    )
+                    pr_info = None
+                    if t.branch_name:
+                        pr_info = pr_by_branch.get(t.branch_name.lower())
+                    if not pr_info:
+                        pr_info = pr_by_ticket.get(t.identifier.upper())
+                    tickets.append(
+                        TicketInfo(
+                            id=t.id,
+                            identifier=t.identifier,
+                            title=t.title,
+                            state=t.state,
+                            state_type=t.state_type,
+                            priority=t.priority,
+                            assignee=t.assignee,
+                            url=t.url,
+                            branch_name=t.branch_name,
+                            has_local_worktree=has_local,
+                            pr_info=pr_info,
+                        )
+                    )
+                self.state._tickets_by_mode[mode] = tickets
+
     def _load_local_worktrees(self) -> None:
         """Populate worktree list from git (fast, local-only).
 
@@ -481,6 +529,8 @@ class FwtsTUI:
         # One bulk fetch for all open PRs (includes merge queue data)
         github_repo = self.config.project.github_repo
         all_prs = list_prs_detailed(github_repo) if github_repo else []
+        if all_prs:
+            self._cache.save_prs(all_prs)
         pr_by_branch, pr_by_ticket = self._build_pr_lookups(all_prs)
 
         # Local worktrees (needed by multiple views)
@@ -781,7 +831,7 @@ class FwtsTUI:
         table.add_column("W", width=1)
 
         if not self.state.prs:
-            if self.state.loading or self.state.needs_refresh:
+            if self.state.loading:
                 table.add_row(
                     "", "", "", "[yellow]⟳ Loading PRs...[/yellow]", "", "", "", "", "", "", ""
                 )
@@ -1655,6 +1705,7 @@ class FwtsTUI:
         # Fast local-only load so worktrees are interactable immediately,
         # then kick off background refresh for PR data, hooks, and tickets.
         self._load_local_worktrees()
+        self._load_from_cache()
         self._start_background_refresh()
 
         action = None

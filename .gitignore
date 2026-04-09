@@ -54,6 +54,9 @@ coverage.xml
 .fwts.toml
 .fwts.local.toml
 
+# Claude
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
