@@ -10,7 +10,6 @@ from fwts.git import (
     branch_is_pushed,
     get_current_branch,
     get_repo_root,
-    has_graphite,
     list_worktrees,
     remote_branch_exists,
 )
@@ -156,20 +155,6 @@ detached
 
     assert len(result) == 1
     assert result[0].is_detached is True
-
-
-def test_has_graphite_true():
-    """Test has_graphite returns True when gt is available."""
-    with patch("fwts.git.subprocess.run") as mock:
-        mock.return_value = MagicMock(returncode=0)
-        assert has_graphite() is True
-
-
-def test_has_graphite_false():
-    """Test has_graphite returns False when gt is not available."""
-    with patch("fwts.git.subprocess.run") as mock:
-        mock.side_effect = FileNotFoundError()
-        assert has_graphite() is False
 
 
 def test_get_repo_root(mock_subprocess):

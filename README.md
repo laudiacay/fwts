@@ -15,7 +15,6 @@ Git worktree workflow manager for feature development. Automates creating worktr
 - **Docker Compose** - Start/stop isolated docker services per feature
 - **Linear Integration** - Resolve ticket IDs to branch names
 - **GitHub Integration** - Resolve PR numbers to branches
-- **Graphite Support** - Optional stacking workflow integration
 - **Interactive TUI** - Rich terminal UI for viewing and managing worktrees
 - **Programmable Columns** - Custom hooks for CI status, review status, etc.
 - **Shell Completions** - bash, zsh, and fish support
@@ -88,7 +87,7 @@ The wizard will auto-detect:
 
 And prompt you to configure:
 - Worktree base directory
-- Integrations (Linear, Graphite, Docker)
+- Integrations (Linear, Docker)
 - Tmux layout (editor, side pane)
 - Claude Code context
 - Lifecycle hooks
@@ -169,10 +168,6 @@ github_repo = "username/myproject"
 [linear]
 enabled = true
 # LINEAR_API_KEY from environment
-
-[graphite]
-enabled = false
-trunk = "main"
 
 [tmux]
 editor = "nvim ."
@@ -329,7 +324,6 @@ fwts completions fish > ~/.config/fish/completions/fwts.fish
 - git
 - tmux
 - gh (GitHub CLI) - optional, for PR integration
-- gt (Graphite) - optional, for stacking workflow
 
 ## License
 

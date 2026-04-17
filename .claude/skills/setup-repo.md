@@ -30,7 +30,6 @@ Ask the user:
 
 3. **Integrations**
    - Do they use Linear for issue tracking?
-   - Do they use Graphite for PR stacking?
    - Do they want tmux sessions auto-created for each worktree?
      - If yes: What editor command? (default: `nvim .`)
      - Side pane command? (default: `claude`)
@@ -61,10 +60,6 @@ github_repo = "{github_repo}"
 
 [linear]
 enabled = {true|false}
-
-[graphite]
-enabled = {true|false}
-trunk = "main"
 
 [tmux]
 editor = "{editor_cmd}"

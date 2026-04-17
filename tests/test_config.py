@@ -11,7 +11,6 @@ def test_parse_empty_config():
 
     assert config.project.base_branch == "main"
     assert config.linear.enabled is False
-    assert config.graphite.enabled is False
     assert config.tmux.editor == "nvim ."
     assert config.symlinks == []
 
@@ -48,21 +47,6 @@ def test_parse_linear_config():
     config = parse_config(data)
 
     assert config.linear.enabled is True
-
-
-def test_parse_graphite_config():
-    """Test parsing graphite section."""
-    data = {
-        "graphite": {
-            "enabled": True,
-            "trunk": "main",
-        }
-    }
-
-    config = parse_config(data)
-
-    assert config.graphite.enabled is True
-    assert config.graphite.trunk == "main"
 
 
 def test_parse_tmux_config():
@@ -155,7 +139,6 @@ def test_full_config():
             "github_repo": "workonsupplyco/supplyco",
         },
         "linear": {"enabled": True},
-        "graphite": {"enabled": True, "trunk": "dev"},
         "tmux": {
             "editor": "nvim .",
             "side_command": "claude",
@@ -182,7 +165,6 @@ def test_full_config():
 
     assert config.project.name == "supplyco"
     assert config.linear.enabled is True
-    assert config.graphite.trunk == "dev"
     assert config.docker.enabled is True
     assert config.docker.compose_file == "docker-compose.dev.yml"
     assert len(config.tui.columns) == 1

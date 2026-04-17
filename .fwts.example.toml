@@ -12,10 +12,6 @@ github_repo = "username/myproject"  # For gh CLI integration
 enabled = true
 # LINEAR_API_KEY should be set in environment
 
-[graphite]
-enabled = false        # Set to true if using Graphite for stacking
-trunk = "main"
-
 [tmux]
 editor = "nvim ."      # Command to run in first pane
 side_command = "claude" # Command to run in second pane

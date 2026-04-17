@@ -44,14 +44,6 @@ class LinearConfig:
 
 
 @dataclass
-class GraphiteConfig:
-    """Graphite integration configuration."""
-
-    enabled: bool = False
-    trunk: str = "main"
-
-
-@dataclass
 class DockerConfig:
     """Docker compose configuration."""
 
@@ -138,7 +130,6 @@ class Config:
 
     project: ProjectConfig = field(default_factory=ProjectConfig)
     linear: LinearConfig = field(default_factory=LinearConfig)
-    graphite: GraphiteConfig = field(default_factory=GraphiteConfig)
     tmux: TmuxConfig = field(default_factory=TmuxConfig)
     docker: DockerConfig = field(default_factory=DockerConfig)
     lifecycle: LifecycleConfig = field(default_factory=LifecycleConfig)
@@ -248,12 +239,6 @@ def parse_config(data: dict[str, Any]) -> Config:
         api_key=linear_data.get("api_key"),
     )
 
-    graphite_data = data.get("graphite", {})
-    graphite = GraphiteConfig(
-        enabled=graphite_data.get("enabled", False),
-        trunk=graphite_data.get("trunk", "main"),
-    )
-
     tmux_data = data.get("tmux", {})
     tmux = TmuxConfig(
         editor=tmux_data.get("editor", "nvim ."),
@@ -298,7 +283,6 @@ def parse_config(data: dict[str, Any]) -> Config:
     return Config(
         project=project,
         linear=linear,
-        graphite=graphite,
         tmux=tmux,
         docker=docker,
         lifecycle=lifecycle,
@@ -482,10 +466,6 @@ github_repo = "username/myproject"
 [linear]
 enabled = true
 # LINEAR_API_KEY from env
-
-[graphite]
-enabled = false
-trunk = "main"
 
 [tmux]
 editor = "nvim ."

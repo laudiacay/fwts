@@ -205,39 +205,6 @@ def prune_worktrees(cwd: Path | None = None) -> None:
     run_git(["worktree", "prune"], cwd=cwd)
 
 
-def has_graphite() -> bool:
-    """Check if graphite CLI is installed."""
-    try:
-        subprocess.run(
-            ["gt", "--version"],
-            capture_output=True,
-            check=True,
-            stdin=subprocess.DEVNULL,
-        )
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-
-
-def graphite_init(trunk: str, cwd: Path | None = None) -> None:
-    """Initialize graphite in the worktree."""
-    subprocess.run(
-        ["gt", "repo", "init", "--trunk", trunk],
-        cwd=cwd,
-        capture_output=True,
-        check=True,
-        stdin=subprocess.DEVNULL,
-    )
-
-
-def graphite_track(parent: str | None = None, cwd: Path | None = None) -> None:
-    """Track current branch with graphite."""
-    args = ["gt", "branch", "track"]
-    if parent:
-        args.extend(["--parent", parent])
-    subprocess.run(args, cwd=cwd, capture_output=True, check=True, stdin=subprocess.DEVNULL)
-
-
 def get_branch_from_worktree_path(path: Path) -> str | None:
     """Get branch name from worktree path."""
     worktrees = list_worktrees()

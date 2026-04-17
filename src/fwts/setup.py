@@ -128,12 +128,6 @@ def _project_setup(path: Path) -> str:
     # Linear
     linear_enabled = Confirm.ask("Enable Linear integration?", default=True)
 
-    # Graphite
-    graphite_enabled = Confirm.ask("Enable Graphite integration?", default=False)
-    graphite_trunk = base_branch
-    if graphite_enabled:
-        graphite_trunk = Prompt.ask("Graphite trunk branch", default=base_branch)
-
     console.print()
     console.print("[bold]Tmux Layout[/bold]")
 
@@ -172,10 +166,6 @@ github_repo = "{github_repo}"
 [linear]
 enabled = {str(linear_enabled).lower()}
 # LINEAR_API_KEY from env
-
-[graphite]
-enabled = {str(graphite_enabled).lower()}
-trunk = "{graphite_trunk}"
 
 [tmux]
 editor = "{editor}"
