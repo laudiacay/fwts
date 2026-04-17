@@ -1762,9 +1762,12 @@ class FwtsTUI:
                     if (self.state.needs_refresh or needs_auto) and not self.state.loading:
                         self._start_background_refresh()
 
-                    # Handle input - non-blocking read with timeout for resize/refresh
+                    # Handle input - non-blocking read with a short timeout so
+                    # the UI stays snappy even while a background refresh is in
+                    # flight. The main thread does nothing heavy, so short polls
+                    # just cost an extra render pass.
                     try:
-                        key = self._get_key_with_timeout(timeout=0.5)
+                        key = self._get_key_with_timeout(timeout=0.05)
 
                         if key is None:
                             continue
